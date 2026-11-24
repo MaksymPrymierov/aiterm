@@ -1,5 +1,7 @@
 # aiterm
 
+[![CI](https://github.com/MaksymPrymierov/aiterm/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/MaksymPrymierov/aiterm/actions/workflows/ci.yml)
+
 A modern GPU-accelerated terminal emulator for Linux (Wayland), built for working with AI coding agents, especially [Claude Code](https://code.claude.com).
 
 > **Status: early development (v0.1, MVP).** aiterm runs a shell and renders TUI applications correctly, but tabs, configuration and inline images are not implemented yet. See the [roadmap](#roadmap).
@@ -46,10 +48,17 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 
 ## Installation
 
-Requirements: Rust 1.85+ (edition 2024), a Vulkan (or GL) driver, a Wayland compositor and `fontconfig`.
+Prebuilt x86_64 Linux binaries are attached to every [GitHub release](https://github.com/MaksymPrymierov/aiterm/releases):
 
 ```sh
-git clone <repo-url> aiterm
+tar -xzf aiterm-v*-x86_64-linux.tar.gz
+./aiterm-v*-x86_64-linux/aiterm
+```
+
+To build from source you need Rust 1.85+ (edition 2024). Running requires a Vulkan (or GL) driver, a Wayland compositor and `fontconfig`.
+
+```sh
+git clone https://github.com/MaksymPrymierov/aiterm.git
 cd aiterm
 cargo build --release
 ./target/release/aiterm
@@ -111,8 +120,23 @@ Key design decisions:
 ```sh
 cargo build            # debug build
 cargo test             # unit tests
+cargo fmt              # format (max width 120, see rustfmt.toml)
 cargo clippy           # linter (must be warning-free)
 RUST_LOG=info cargo run -- -e bash
+```
+
+### CI and releases
+
+- **CI** (`.github/workflows/ci.yml`) runs on pushes to `master` and on pull requests into `master`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` and a release build. The binary is uploaded as a workflow artifact.
+- **Releases** (`.github/workflows/release.yml`) run when a `vX.Y.Z` tag is pushed. The workflow checks that the tag matches the crate version, then builds, packages `aiterm` with `README.md` and `LICENSE`, and publishes a GitHub release with a SHA-256 checksum. Tags with a suffix (e.g. `v0.2.0-beta.1`) become pre-releases.
+
+To cut a release:
+
+```sh
+# bump `version` in the root Cargo.toml, then:
+cargo build && git commit -am "Release v0.2.0"
+git tag v0.2.0
+git push origin master v0.2.0
 ```
 
 ## Known limitations

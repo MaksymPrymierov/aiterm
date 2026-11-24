@@ -62,7 +62,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn spawn(proxy: EventLoopProxy<UserEvent>, size: GridSize, command: Option<Vec<String>>) -> std::io::Result<Self> {
+    pub fn spawn(
+        proxy: EventLoopProxy<UserEvent>,
+        size: GridSize,
+        command: Option<Vec<String>>,
+    ) -> std::io::Result<Self> {
         let mut env = HashMap::new();
         env.insert("TERM".into(), "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
@@ -74,10 +78,17 @@ impl Session {
                 tty::Shell::new(program, c)
             })
         });
-        let options = tty::Options { shell, env, ..Default::default() };
+        let options = tty::Options {
+            shell,
+            env,
+            ..Default::default()
+        };
 
         let proxy = EventProxy(proxy);
-        let config = term::Config { scrolling_history: 50_000, ..Default::default() };
+        let config = term::Config {
+            scrolling_history: 50_000,
+            ..Default::default()
+        };
         let term = Term::new(config, &TermSize::new(size.cols, size.rows), proxy.clone());
         let term = Arc::new(FairMutex::new(term));
 
@@ -157,7 +168,11 @@ impl Session {
         let cols = term.columns();
         let rows = term.screen_lines();
         let offset = content.display_offset as i32;
-        let resolver = ColorResolver { theme, palette, overrides: content.colors };
+        let resolver = ColorResolver {
+            theme,
+            palette,
+            overrides: content.colors,
+        };
 
         let mut cells = vec![CellView::blank(theme); cols * rows];
         let selection = content.selection;
@@ -179,35 +194,55 @@ impl Session {
             if flags.contains(Flags::HIDDEN) {
                 fg = bg;
             }
-            let selected = selection.is_some_and(|s| s.contains_cell(&indexed, content.cursor.point, content.cursor.shape));
+            let selected =
+                selection.is_some_and(|s| s.contains_cell(&indexed, content.cursor.point, content.cursor.shape));
             if selected {
                 bg = theme.selection_bg;
             }
 
             let zerowidth = cell.zerowidth().map(|z| z.iter().collect::<String>());
-            cells[row as usize * cols + col] = CellView { c: cell.c, zerowidth, fg, bg, flags };
+            cells[row as usize * cols + col] = CellView {
+                c: cell.c,
+                zerowidth,
+                fg,
+                bg,
+                flags,
+            };
         }
 
         let cursor_row = content.cursor.point.line.0 + offset;
-        let cursor = (content.cursor.shape != CursorShape::Hidden
-            && cursor_row >= 0
-            && (cursor_row as usize) < rows)
+        let cursor = (content.cursor.shape != CursorShape::Hidden && cursor_row >= 0 && (cursor_row as usize) < rows)
             .then(|| Cursor {
                 row: cursor_row as usize,
                 col: content.cursor.point.column.0.min(cols.saturating_sub(1)),
-                shape: if focused { content.cursor.shape } else { CursorShape::HollowBlock },
-                color: content.colors[NamedColor::Cursor].map(Rgb::from).unwrap_or(theme.cursor),
+                shape: if focused {
+                    content.cursor.shape
+                } else {
+                    CursorShape::HollowBlock
+                },
+                color: content.colors[NamedColor::Cursor]
+                    .map(Rgb::from)
+                    .unwrap_or(theme.cursor),
             });
 
         // Block cursor: draw the glyph under it in the background color.
         if let Some(c) = &cursor
-            && c.shape == CursorShape::Block {
-                let cell = &mut cells[c.row * cols + c.col];
-                cell.fg = cell.bg;
-            }
+            && c.shape == CursorShape::Block
+        {
+            let cell = &mut cells[c.row * cols + c.col];
+            cell.fg = cell.bg;
+        }
 
-        let background = content.colors[NamedColor::Background].map(Rgb::from).unwrap_or(theme.background);
-        Frame { cols, rows, cells, cursor, background }
+        let background = content.colors[NamedColor::Background]
+            .map(Rgb::from)
+            .unwrap_or(theme.background);
+        Frame {
+            cols,
+            rows,
+            cells,
+            cursor,
+            background,
+        }
     }
 }
 
@@ -222,7 +257,13 @@ pub struct CellView {
 
 impl CellView {
     fn blank(theme: &Theme) -> Self {
-        Self { c: ' ', zerowidth: None, fg: theme.foreground, bg: theme.background, flags: Flags::empty() }
+        Self {
+            c: ' ',
+            zerowidth: None,
+            fg: theme.foreground,
+            bg: theme.background,
+            flags: Flags::empty(),
+        }
     }
 }
 
@@ -265,7 +306,11 @@ impl ColorResolver<'_> {
             Color::Spec(c) => c.into(),
             Color::Indexed(i) => {
                 // Bold-as-bright for the 8 basic colors.
-                let i = if is_fg && i < 8 && flags.contains(Flags::BOLD) { i + 8 } else { i };
+                let i = if is_fg && i < 8 && flags.contains(Flags::BOLD) {
+                    i + 8
+                } else {
+                    i
+                };
                 self.indexed(i as usize)
             }
             Color::Named(n) => {

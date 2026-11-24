@@ -51,9 +51,10 @@ impl App {
 
     fn clipboard_set(&mut self, kind: LinuxClipboardKind, text: String) {
         if let Some(cb) = self.clipboard.as_mut()
-            && let Err(e) = cb.set().clipboard(kind).text(text) {
-                log::warn!("clipboard: {e}");
-            }
+            && let Err(e) = cb.set().clipboard(kind).text(text)
+        {
+            log::warn!("clipboard: {e}");
+        }
     }
 
     fn paste(&mut self, kind: LinuxClipboardKind) {
@@ -72,7 +73,10 @@ impl App {
 
     fn resize_grid(st: &mut WindowState) {
         let size = st.renderer.grid_size();
-        if size.cols != st.session.size.cols || size.rows != st.session.size.rows || size.cell_w != st.session.size.cell_w {
+        if size.cols != st.session.size.cols
+            || size.rows != st.session.size.rows
+            || size.cell_w != st.session.size.cell_w
+        {
             st.session.resize(size);
         }
         st.renderer.window().request_redraw();
@@ -161,7 +165,11 @@ impl App {
                     i if i < 256 => self.palette[i],
                     _ => self.theme.foreground,
                 };
-                let c = alacritty_terminal::vte::ansi::Rgb { r: rgb.r, g: rgb.g, b: rgb.b };
+                let c = alacritty_terminal::vte::ansi::Rgb {
+                    r: rgb.r,
+                    g: rgb.g,
+                    b: rgb.b,
+                };
                 st.session.write(f(c).into_bytes());
             }
             TermEvent::ClipboardStore(ty, text) => {
@@ -183,7 +191,9 @@ impl App {
             }
             TermEvent::Bell => {
                 if !st.focused {
-                    st.renderer.window().request_user_attention(Some(winit::window::UserAttentionType::Informational));
+                    st.renderer
+                        .window()
+                        .request_user_attention(Some(winit::window::UserAttentionType::Informational));
                 }
             }
             TermEvent::Exit | TermEvent::ChildExit(_) => event_loop.exit(),
@@ -232,20 +242,36 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         if let WindowEvent::KeyboardInput { event: key, .. } = &event
-            && key.state == ElementState::Pressed && self.shortcut(key) {
-                return;
-            }
-        if let WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } = &event {
+            && key.state == ElementState::Pressed
+            && self.shortcut(key)
+        {
+            return;
+        }
+        if let WindowEvent::MouseInput {
+            state: ElementState::Released,
+            button: MouseButton::Left,
+            ..
+        } = &event
+        {
             // Select-to-copy (Linux primary selection) when releasing after a drag.
-            if self.state.as_ref().is_some_and(|s| s.mouse_down == Some(MouseButton::Left) && Self::mouse_reporting(s).is_none()) {
+            if self
+                .state
+                .as_ref()
+                .is_some_and(|s| s.mouse_down == Some(MouseButton::Left) && Self::mouse_reporting(s).is_none())
+            {
                 self.copy_selection(LinuxClipboardKind::Primary);
             }
         }
-        if let WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Middle, .. } = &event
-            && self.state.as_ref().is_some_and(|s| Self::mouse_reporting(s).is_none()) {
-                self.paste(LinuxClipboardKind::Primary);
-                return;
-            }
+        if let WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            button: MouseButton::Middle,
+            ..
+        } = &event
+            && self.state.as_ref().is_some_and(|s| Self::mouse_reporting(s).is_none())
+        {
+            self.paste(LinuxClipboardKind::Primary);
+            return;
+        }
 
         let Some(st) = self.state.as_mut() else { return };
         match event {
@@ -269,9 +295,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ModifiersChanged(m) => st.modifiers = m.state(),
             WindowEvent::KeyboardInput { event: key, .. } => {
                 if key.state == ElementState::Pressed
-                    && let Some(bytes) = input::encode(&key, st.modifiers, st.session.mode()) {
-                        st.session.input(bytes);
-                    }
+                    && let Some(bytes) = input::encode(&key, st.modifiers, st.session.mode())
+                {
+                    st.session.input(bytes);
+                }
             }
             WindowEvent::Ime(Ime::Commit(text)) => st.session.input(text.into_bytes()),
             WindowEvent::CursorMoved { position, .. } => {

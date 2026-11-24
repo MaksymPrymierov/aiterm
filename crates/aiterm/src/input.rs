@@ -26,13 +26,21 @@ fn cursor_key(letter: char, m: ModifiersState, mode: TermMode) -> Vec<u8> {
 /// `CSI n ~` / `CSI n;m ~`.
 fn tilde_key(n: u8, m: ModifiersState) -> Vec<u8> {
     let p = mod_param(m);
-    if p > 1 { format!("\x1b[{n};{p}~").into_bytes() } else { format!("\x1b[{n}~").into_bytes() }
+    if p > 1 {
+        format!("\x1b[{n};{p}~").into_bytes()
+    } else {
+        format!("\x1b[{n}~").into_bytes()
+    }
 }
 
 /// F1-F4 use SS3 P..S.
 fn ss3_fkey(letter: char, m: ModifiersState) -> Vec<u8> {
     let p = mod_param(m);
-    if p > 1 { format!("\x1b[1;{p}{letter}").into_bytes() } else { format!("\x1bO{letter}").into_bytes() }
+    if p > 1 {
+        format!("\x1b[1;{p}{letter}").into_bytes()
+    } else {
+        format!("\x1bO{letter}").into_bytes()
+    }
 }
 
 fn ctrl_byte(c: char) -> Option<u8> {
@@ -136,13 +144,19 @@ mod tests {
     fn modifier_params() {
         let shift_ctrl = ModifiersState::SHIFT | ModifiersState::CONTROL;
         assert_eq!(cursor_key('A', shift_ctrl, TermMode::empty()), b"\x1b[1;6A");
-        assert_eq!(cursor_key('A', ModifiersState::empty(), TermMode::APP_CURSOR), b"\x1bOA");
+        assert_eq!(
+            cursor_key('A', ModifiersState::empty(), TermMode::APP_CURSOR),
+            b"\x1bOA"
+        );
         assert_eq!(tilde_key(3, ModifiersState::ALT), b"\x1b[3;3~");
     }
 
     #[test]
     fn paste_is_bracketed_and_sanitized() {
-        assert_eq!(paste_bytes("a\x1b[201~b", TermMode::BRACKETED_PASTE), b"\x1b[200~a[201~b\x1b[201~");
+        assert_eq!(
+            paste_bytes("a\x1b[201~b", TermMode::BRACKETED_PASTE),
+            b"\x1b[200~a[201~b\x1b[201~"
+        );
         assert_eq!(paste_bytes("a\nb\r\nc", TermMode::empty()), b"a\rb\rc");
     }
 }

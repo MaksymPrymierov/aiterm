@@ -17,9 +17,16 @@ aiterm is a GPU-accelerated terminal emulator for Linux/Wayland, designed for wo
 ```sh
 cargo build                          # debug build
 cargo test                           # unit tests
-cargo clippy                         # must stay warning-free
+cargo fmt                            # max_width = 120 (rustfmt.toml); CI runs `cargo fmt --check`
+cargo clippy                         # must stay warning-free; CI runs it with `-D warnings`
 RUST_LOG=info cargo run -- -e bash   # run with logging; `-e` runs a command instead of $SHELL
 ```
+
+## CI and releases
+
+- `.github/workflows/ci.yml` runs on pushes and pull requests to `master`: fmt check, clippy (`-D warnings`), tests, release build.
+- `.github/workflows/release.yml` runs on `vX.Y.Z` tags: the tag must equal the workspace `version` in the root `Cargo.toml`, otherwise the release fails. Bump the version (and `Cargo.lock`) before tagging.
+- The release binary must stay free of system library link dependencies beyond libc (Wayland, xkbcommon and fonts are loaded at runtime), so the CI runner needs no extra packages.
 
 ## Code layout
 

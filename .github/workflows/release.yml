@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check tag matches crate version
+        run: |
+          crate_version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "aiterm") | .version')
+          if [ "v${crate_version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match crate version ${crate_version}"
+            exit 1
+          fi
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package
+        id: package
+        run: |
+          name="aiterm-${GITHUB_REF_NAME}-x86_64-linux"
+          mkdir -p "dist/${name}"
+          cp target/release/aiterm README.md LICENSE "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          echo "archive=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--title "aiterm ${GITHUB_REF_NAME}" --generate-notes --verify-tag)
+          # Tags like v0.2.0-beta.1 are published as pre-releases.
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            "${{ steps.package.outputs.archive }}" \
+            "${{ steps.package.outputs.archive }}.sha256" \
+            "${flags[@]}"

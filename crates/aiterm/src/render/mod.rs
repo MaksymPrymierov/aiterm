@@ -12,8 +12,8 @@ use alacritty_terminal::index::Side;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::CursorShape;
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GColor, Family, FontSystem, Metrics, Resolution, Shaping,
-    Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
+    Attrs, Buffer, Cache, Color as GColor, Family, FontSystem, Metrics, Resolution, Shaping, Style, SwashCache,
+    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
@@ -118,7 +118,12 @@ impl Renderer {
             .expect("request device");
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -159,7 +164,10 @@ impl Renderer {
         let quad_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("quad bg"),
             layout: &bgl,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform_buf.as_entire_binding() }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buf.as_entire_binding(),
+            }],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("quad layout"),
@@ -205,7 +213,10 @@ impl Renderer {
         let mut atlas = TextAtlas::new(&device, &queue, &cache, format);
         let text_renderer = TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
 
-        let font_size = std::env::var("AITERM_FONT_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(13.0);
+        let font_size = std::env::var("AITERM_FONT_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(13.0);
         let mut this = Self {
             device,
             queue,
@@ -227,7 +238,11 @@ impl Renderer {
             font_family: default_font_family(),
             font_size,
             scale,
-            metrics: CellMetrics { font_px: 1.0, w: 1.0, h: 1.0 },
+            metrics: CellMetrics {
+                font_px: 1.0,
+                w: 1.0,
+                h: 1.0,
+            },
             window,
         };
         log::info!("font: {:?} {}pt", this.font_family, this.font_size);
@@ -290,9 +305,18 @@ impl Renderer {
 
     pub fn grid_size(&self) -> GridSize {
         let pad = self.padding();
-        let cols = ((self.config.width as f32 - 2.0 * pad) / self.metrics.w).floor().max(2.0) as usize;
-        let rows = ((self.config.height as f32 - 2.0 * pad) / self.metrics.h).floor().max(1.0) as usize;
-        GridSize { cols, rows, cell_w: self.metrics.w, cell_h: self.metrics.h }
+        let cols = ((self.config.width as f32 - 2.0 * pad) / self.metrics.w)
+            .floor()
+            .max(2.0) as usize;
+        let rows = ((self.config.height as f32 - 2.0 * pad) / self.metrics.h)
+            .floor()
+            .max(1.0) as usize;
+        GridSize {
+            cols,
+            rows,
+            cell_w: self.metrics.w,
+            cell_h: self.metrics.h,
+        }
     }
 
     /// Pixel position -> (row, col, side of the cell).
@@ -310,7 +334,9 @@ impl Renderer {
             c.c.hash(&mut h);
             c.zerowidth.hash(&mut h);
             c.fg.hash(&mut h);
-            (c.flags & (Flags::BOLD | Flags::ITALIC | Flags::WIDE_CHAR_SPACER)).bits().hash(&mut h);
+            (c.flags & (Flags::BOLD | Flags::ITALIC | Flags::WIDE_CHAR_SPACER))
+                .bits()
+                .hash(&mut h);
         }
         h.finish()
     }
@@ -322,29 +348,37 @@ impl Renderer {
         // (start col, fg, bold, italic, text)
         let mut run: Option<(usize, Rgb, bool, bool, String)> = None;
 
-        let flush = |run: &mut Option<(usize, Rgb, bool, bool, String)>, fs: &mut FontSystem, out: &mut Vec<Segment>| {
-            if let Some((col, fg, bold, italic, text)) = run.take() {
-                let text = text.trim_end();
-                if text.is_empty() {
-                    return;
+        let flush =
+            |run: &mut Option<(usize, Rgb, bool, bool, String)>, fs: &mut FontSystem, out: &mut Vec<Segment>| {
+                if let Some((col, fg, bold, italic, text)) = run.take() {
+                    let text = text.trim_end();
+                    if text.is_empty() {
+                        return;
+                    }
+                    let mut attrs = Attrs::new().family(Family::Name(&family));
+                    if bold {
+                        attrs = attrs.weight(Weight::BOLD);
+                    }
+                    if italic {
+                        attrs = attrs.style(Style::Italic);
+                    }
+                    let mut buffer = Buffer::new(fs, Metrics::new(m.font_px, m.h));
+                    buffer.set_size(None, Some(m.h));
+                    buffer.set_text(text, &attrs, Shaping::Advanced, None);
+                    buffer.shape_until_scroll(fs, false);
+                    out.push(Segment {
+                        x: col as f32 * m.w,
+                        fg,
+                        buffer,
+                    });
                 }
-                let mut attrs = Attrs::new().family(Family::Name(&family));
-                if bold {
-                    attrs = attrs.weight(Weight::BOLD);
-                }
-                if italic {
-                    attrs = attrs.style(Style::Italic);
-                }
-                let mut buffer = Buffer::new(fs, Metrics::new(m.font_px, m.h));
-                buffer.set_size(None, Some(m.h));
-                buffer.set_text(text, &attrs, Shaping::Advanced, None);
-                buffer.shape_until_scroll(fs, false);
-                out.push(Segment { x: col as f32 * m.w, fg, buffer });
-            }
-        };
+            };
 
         for (col, cell) in cells.iter().enumerate() {
-            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
                 flush(&mut run, &mut self.font_system, &mut segments);
                 continue;
             }
@@ -384,7 +418,11 @@ impl Renderer {
     }
 
     fn push_quad(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb) {
-        self.quads.push(QuadInstance { pos: [x, y], size: [w, h], color: color.to_linear() });
+        self.quads.push(QuadInstance {
+            pos: [x, y],
+            size: [w, h],
+            color: color.to_linear(),
+        });
     }
 
     pub fn render(&mut self, frame: &Frame) {
@@ -420,7 +458,11 @@ impl Renderer {
                 if bg != frame.background {
                     // Extend edge cells into the padding so colored lines reach the window border.
                     let x0 = if start == 0 { 0.0 } else { pad + start as f32 * m.w };
-                    let x1 = if c == frame.cols { width as f32 } else { pad + c as f32 * m.w };
+                    let x1 = if c == frame.cols {
+                        width as f32
+                    } else {
+                        pad + c as f32 * m.w
+                    };
                     self.push_quad(x0, y, x1 - x0, m.h, bg);
                 }
             }
@@ -458,12 +500,22 @@ impl Renderer {
             self.instance_cap = self.quads.len().next_power_of_two();
             self.instance_buf = Self::make_instance_buf(&self.device, self.instance_cap);
         }
-        self.queue.write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(&self.quads));
-        self.queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&[width as f32, height as f32, 0.0, 0.0]));
+        self.queue
+            .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(&self.quads));
+        self.queue.write_buffer(
+            &self.uniform_buf,
+            0,
+            bytemuck::cast_slice(&[width as f32, height as f32, 0.0, 0.0]),
+        );
 
         // --- Prepare text ---
         self.viewport.update(&self.queue, Resolution { width, height });
-        let bounds = TextBounds { left: 0, top: 0, right: width as i32, bottom: height as i32 };
+        let bounds = TextBounds {
+            left: 0,
+            top: 0,
+            right: width as i32,
+            bottom: height as i32,
+        };
         let areas = self.rows.iter().enumerate().flat_map(|(r, row)| {
             row.segments.iter().map(move |s| TextArea {
                 buffer: &s.buffer,
@@ -507,7 +559,10 @@ impl Renderer {
                 return;
             }
             wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = self.instance.create_surface(self.window.clone()).expect("recreate surface");
+                self.surface = self
+                    .instance
+                    .create_surface(self.window.clone())
+                    .expect("recreate surface");
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
                 return;
@@ -515,7 +570,9 @@ impl Renderer {
             wgpu::CurrentSurfaceTexture::Validation => panic!("surface validation error"),
         };
         let view = surface_tex.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let [r, g, b, _] = frame.background.to_linear();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -525,7 +582,12 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: r as f64, g: g as f64, b: b as f64, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: r as f64,
+                            g: g as f64,
+                            b: b as f64,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
