@@ -26,7 +26,8 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 - 16 / 256 / truecolor; bold, italic, underline, strikethrough, dim, inverse
 - Cursor shapes: block, beam, underline, hollow block (when unfocused)
 - Emoji and Nerd Font icons are pinned to the cell grid and never shift the line
-- xterm-style keyboard encoding (modifiers, function keys, application cursor mode)
+- [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) with all progressive enhancement flags (disambiguate, event types, alternate keys, all keys as escape codes, associated text): Shift+Enter, Ctrl+Enter, Alt combinations and key releases reach applications unambiguously
+- xterm-style keyboard encoding for applications that don't enable the kitty protocol; Ctrl shortcuts also work in non-Latin layouts (Ctrl+С on a Ukrainian layout sends Ctrl+C)
 - Mouse reporting for applications (SGR and X10): vim, htop, mc
 - Mouse selection: simple, word (double-click), line (triple-click), block (Ctrl)
 - Clipboard and primary selection (copy on select, paste with middle click)
@@ -38,7 +39,7 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 
 | Version | Scope |
 |---|---|
-| 0.2 | Kitty keyboard protocol (Shift+Enter with no setup), synchronized output, desktop notifications (OSC 9/777/99), progress (OSC 9;4), OSC 7/8/133 |
+| 0.2 | ~~Kitty keyboard protocol~~ (done), synchronized output, desktop notifications (OSC 9/777/99), progress (OSC 9;4), OSC 7/8/133 |
 | 0.3 | Tabs and splits, per-tab session status indicator |
 | 0.4 | Inline images: kitty graphics protocol, Sixel, iTerm2 inline images |
 | 0.5 | TOML config with hot reload, themes, GUI color editor, command palette |
@@ -81,7 +82,7 @@ aiterm -e htop
 | Middle click | Paste primary selection |
 | <kbd>Shift</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd> | Scroll history |
 | <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>-</kbd> / <kbd>0</kbd> | Increase / decrease / reset font size |
-| <kbd>Shift</kbd>+<kbd>Enter</kbd> | Newline in Claude Code (currently sends `ESC CR`) |
+| <kbd>Shift</kbd>+<kbd>Enter</kbd> | Newline in Claude Code: `CSI 13;2u` with the kitty protocol, `ESC CR` otherwise |
 | <kbd>Shift</kbd> + mouse | Select text even when an application captures the mouse |
 
 ### Configuration

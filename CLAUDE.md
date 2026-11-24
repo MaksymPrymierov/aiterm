@@ -34,7 +34,7 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
 
 - `crates/app` (package `aiterm`, the binary)
   - `src/main.rs` — winit `ApplicationHandler`: window/input events, shortcuts, mouse reporting, clipboard, handling of `VtEvent`s.
-  - `src/input.rs` — keyboard encoding to PTY bytes and paste handling (with unit tests).
+  - `src/input.rs` — keyboard encoding: winit `KeyEvent` → platform-independent `KeyInput` → bytes, via the legacy xterm encoder or the kitty keyboard protocol encoder (selected by `Modes::KITTY_*`); paste handling. Heavily unit-tested.
 - `crates/vt` (`aiterm-vt`) — the only crate that depends on `alacritty_terminal`.
   - `src/session.rs` — `Session` (PTY + `Term` + I/O thread), `VtEvent`, `Modes`, selection/scroll API, `Frame` snapshot; colors are resolved here.
   - `src/frame.rs` — backend-independent `Frame`, `CellView`, `CellFlags`, `Cursor`.
@@ -51,8 +51,11 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
 - **Colors.** Quad colors go to the shader in linear space (`Rgb::to_linear`); glyphon takes sRGB.
 - **wgpu surface.** In the `Suboptimal` case, the surface texture must be presented or dropped before calling `surface.configure`.
 - New terminal protocol support (OSC/APC/DCS sequences that alacritty_terminal ignores) goes through `aiterm-intercept`: add the OSC code to `FORWARDED_OSC` in `crates/vt/src/session.rs` and handle `VtEvent::Sequence` in the app. The scanner is an observer and must never modify the byte stream.
+- **Keyboard.** The kitty flag stack (`CSI > u` push, `CSI < u` pop, `CSI = u`, `CSI ? u` query) is handled by alacritty_terminal (`Config::kitty_keyboard`); `input.rs` only encodes keys. Encoders take `KeyInput`, never winit types, so every encoding rule has a unit test. Follow the spec at https://sw.kovidgoyal.net/kitty/keyboard-protocol/ exactly; key events can be traced with `RUST_LOG=aiterm=trace`.
 - Prefer standard terminal protocols (kitty keyboard, OSC 9/777/99, OSC 9;4, OSC 133) over Claude Code-specific hacks.
 
 ## Testing changes visually
 
 Run `cargo run -- -e <script>` with a script that prints the escape sequences you need. On niri, capture only the terminal window with `niri msg action screenshot-window --path <abs-path>`, never the whole screen.
+
+To test keyboard input end to end, run a probe script in aiterm (raw mode, write `CSI > flags u`, record received bytes) and inject keys with `ydotool key <code>:1 <code>:0` (goes through the real keymap) or `wtype` (uses its own keymap, so Shift combinations are not realistic). Always check that the focused window is aiterm (`niri msg --json focused-window`) before injecting keys.

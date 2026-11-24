@@ -1,5 +1,6 @@
 mod input;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,7 +11,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::window::{Window, WindowId};
 
@@ -41,6 +42,9 @@ struct WindowState {
     session: Session,
     renderer: Renderer,
     modifiers: ModifiersState,
+    /// Keys whose press was consumed by an app shortcut; their repeat and
+    /// release events are not sent to the PTY either.
+    consumed_keys: HashSet<PhysicalKey>,
     focused: bool,
     cursor_pos: PhysicalPosition<f64>,
     mouse_down: Option<MouseButton>,
@@ -217,6 +221,7 @@ impl ApplicationHandler<UserEvent> for App {
             session,
             renderer,
             modifiers: ModifiersState::empty(),
+            consumed_keys: HashSet::new(),
             focused: true,
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             mouse_down: None,
@@ -234,8 +239,12 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         if let WindowEvent::KeyboardInput { event: key, .. } = &event
             && key.state == ElementState::Pressed
+            && !key.repeat
             && self.shortcut(key)
         {
+            if let Some(st) = self.state.as_mut() {
+                st.consumed_keys.insert(key.physical_key);
+            }
             return;
         }
         if let WindowEvent::MouseInput {
@@ -285,10 +294,22 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::ModifiersChanged(m) => st.modifiers = m.state(),
             WindowEvent::KeyboardInput { event: key, .. } => {
-                if key.state == ElementState::Pressed
-                    && let Some(bytes) = input::encode(&key, st.modifiers, st.session.modes())
-                {
-                    st.session.input(bytes);
+                if st.consumed_keys.contains(&key.physical_key) {
+                    if key.state == ElementState::Released {
+                        st.consumed_keys.remove(&key.physical_key);
+                    }
+                    return;
+                }
+                let Some(k) = input::KeyInput::from_winit(&key, st.modifiers) else {
+                    return;
+                };
+                log::trace!("key {:?} {:?} -> {k:?}", key.logical_key, key.physical_key);
+                if let Some(bytes) = input::encode(&k, st.session.modes()) {
+                    match k.action {
+                        // Releases (kitty event types) must not scroll or clear the selection.
+                        input::Action::Release => st.session.write(bytes),
+                        _ => st.session.input(bytes),
+                    }
                 }
             }
             WindowEvent::Ime(Ime::Commit(text)) => st.session.input(text.into_bytes()),

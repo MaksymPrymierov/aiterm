@@ -165,6 +165,24 @@ bitflags! {
         const ALT_SCREEN = 1 << 7;
         /// Mouse wheel sends cursor keys on the alternate screen.
         const ALTERNATE_SCROLL = 1 << 8;
+
+        // Kitty keyboard protocol progressive enhancement flags (`CSI > flags u`).
+        // https://sw.kovidgoyal.net/kitty/keyboard-protocol/
+        /// Flag 0b1: report ambiguous keys (Esc, modified keys) as CSI u.
+        const KITTY_DISAMBIGUATE = 1 << 9;
+        /// Flag 0b10: report repeat and release events.
+        const KITTY_EVENT_TYPES = 1 << 10;
+        /// Flag 0b100: report shifted and base-layout keys.
+        const KITTY_ALTERNATE_KEYS = 1 << 11;
+        /// Flag 0b1000: report all keys, including text keys, as escape codes.
+        const KITTY_ALL_KEYS = 1 << 12;
+        /// Flag 0b10000: report the text a key generates.
+        const KITTY_TEXT = 1 << 13;
+        const KITTY_ANY = Self::KITTY_DISAMBIGUATE.bits()
+            | Self::KITTY_EVENT_TYPES.bits()
+            | Self::KITTY_ALTERNATE_KEYS.bits()
+            | Self::KITTY_ALL_KEYS.bits()
+            | Self::KITTY_TEXT.bits();
         const MOUSE_ANY = Self::MOUSE_CLICK.bits() | Self::MOUSE_DRAG.bits() | Self::MOUSE_MOTION.bits();
     }
 }
@@ -181,6 +199,11 @@ impl From<TermMode> for Modes {
             (TermMode::FOCUS_IN_OUT, Modes::FOCUS_IN_OUT),
             (TermMode::ALT_SCREEN, Modes::ALT_SCREEN),
             (TermMode::ALTERNATE_SCROLL, Modes::ALTERNATE_SCROLL),
+            (TermMode::DISAMBIGUATE_ESC_CODES, Modes::KITTY_DISAMBIGUATE),
+            (TermMode::REPORT_EVENT_TYPES, Modes::KITTY_EVENT_TYPES),
+            (TermMode::REPORT_ALTERNATE_KEYS, Modes::KITTY_ALTERNATE_KEYS),
+            (TermMode::REPORT_ALL_KEYS_AS_ESC, Modes::KITTY_ALL_KEYS),
+            (TermMode::REPORT_ASSOCIATED_TEXT, Modes::KITTY_TEXT),
         ];
         map.iter()
             .filter(|(t, _)| m.contains(*t))
@@ -249,6 +272,9 @@ impl Session {
         let listener = Listener(Arc::new(on_event));
         let config = term::Config {
             scrolling_history: 50_000,
+            // Mode stack handling (push/pop/set/query) is done by alacritty_terminal;
+            // key encoding lives in the app.
+            kitty_keyboard: true,
             ..Default::default()
         };
         let term = Term::new(config, &TermSize::new(size.cols, size.rows), listener.clone());
@@ -518,5 +544,8 @@ mod tests {
         let m: Modes = (TermMode::APP_CURSOR | TermMode::SGR_MOUSE | TermMode::MOUSE_DRAG).into();
         assert_eq!(m, Modes::APP_CURSOR | Modes::SGR_MOUSE | Modes::MOUSE_DRAG);
         assert!(m.intersects(Modes::MOUSE_ANY));
+
+        let k: Modes = (TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC).into();
+        assert_eq!(k, Modes::KITTY_DISAMBIGUATE | Modes::KITTY_ALL_KEYS);
     }
 }
