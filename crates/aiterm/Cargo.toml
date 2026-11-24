@@ -1,0 +1,16 @@
+[package]
+name = "aiterm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+alacritty_terminal = "0.26"
+wgpu = "30"
+glyphon = "0.12"
+winit = "0.30.13"
+pollster = "0.4"
+arboard = { version = "3.7", features = ["wayland-data-control"] }
+bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
