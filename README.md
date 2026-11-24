@@ -124,4 +124,4 @@ RUST_LOG=info cargo run -- -e bash
 
 ## License
 
-MIT
+[MIT](LICENSE)
