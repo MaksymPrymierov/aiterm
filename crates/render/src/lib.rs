@@ -8,18 +8,13 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use alacritty_terminal::index::Side;
-use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::vte::ansi::CursorShape;
+use aiterm_vt::{CellFlags as Flags, CellView, CursorShape, Frame, GridSize, Rgb, Side};
 use glyphon::{
     Attrs, Buffer, Cache, Color as GColor, Family, FontSystem, Metrics, Resolution, Shaping, Style, SwashCache,
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
-
-use crate::session::{CellView, Frame, GridSize};
-use crate::theme::Rgb;
 
 const PADDING: f32 = 8.0;
 const LINE_HEIGHT: f32 = 1.25;
@@ -334,7 +329,7 @@ impl Renderer {
             c.c.hash(&mut h);
             c.zerowidth.hash(&mut h);
             c.fg.hash(&mut h);
-            (c.flags & (Flags::BOLD | Flags::ITALIC | Flags::WIDE_CHAR_SPACER))
+            (c.flags & (Flags::BOLD | Flags::ITALIC | Flags::WIDE_SPACER))
                 .bits()
                 .hash(&mut h);
         }
@@ -375,10 +370,7 @@ impl Renderer {
             };
 
         for (col, cell) in cells.iter().enumerate() {
-            if cell
-                .flags
-                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-            {
+            if cell.flags.contains(Flags::WIDE_SPACER) {
                 flush(&mut run, &mut self.font_system, &mut segments);
                 continue;
             }
@@ -468,7 +460,7 @@ impl Renderer {
             }
             for (c, cell) in cells.iter().enumerate() {
                 let x = pad + c as f32 * m.w;
-                if cell.flags.intersects(Flags::ALL_UNDERLINES) {
+                if cell.flags.contains(Flags::UNDERLINE) {
                     self.push_quad(x, y + m.h - thickness * 2.0, m.w, thickness, cell.fg);
                 }
                 if cell.flags.contains(Flags::STRIKEOUT) {
@@ -492,7 +484,6 @@ impl Renderer {
                     self.push_quad(x, y, thickness, m.h, cur.color);
                     self.push_quad(x + w - thickness, y, thickness, m.h, cur.color);
                 }
-                CursorShape::Hidden => {}
             }
         }
 

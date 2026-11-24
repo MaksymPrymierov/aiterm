@@ -98,20 +98,22 @@ Child processes get `TERM=xterm-256color`, `COLORTERM=truecolor` and `TERM_PROGR
 
 ## Architecture
 
+The project is a Cargo workspace:
+
 ```
-crates/aiterm/src/
-├── main.rs        — winit event loop: keyboard, mouse, clipboard, terminal events
-├── session.rs     — PTY + VT state (alacritty_terminal), Frame snapshot
-├── input.rs       — key-to-bytes encoding for the PTY, bracketed paste
-├── theme.rs       — color theme and 256-color palette
-└── render/
-    ├── mod.rs     — wgpu renderer: backgrounds, decorations, cursor, text (glyphon)
-    └── quad.wgsl  — rectangle shader
+crates/
+├── app/        aiterm           — binary: winit event loop, keyboard/mouse input, clipboard
+├── vt/         aiterm-vt        — Session (PTY + VT state), Frame snapshots, theme, events
+├── render/     aiterm-render    — wgpu renderer: backgrounds, decorations, cursor, text
+└── intercept/  aiterm-intercept — streaming scanner for OSC/APC/DCS sequences (no dependencies)
 ```
+
+Dependency graph: `app → render → vt → intercept` (and `app → vt`). Only `vt` depends on `alacritty_terminal`.
 
 Key design decisions:
 
-- **VT core:** [`alacritty_terminal`](https://crates.io/crates/alacritty_terminal) (parser, grid, scrollback, PTY). The renderer only sees a `Frame` snapshot, so the core can be swapped (e.g. for libghostty-vt) without touching the UI.
+- **VT core:** [`alacritty_terminal`](https://crates.io/crates/alacritty_terminal) (parser, grid, scrollback, PTY), wrapped by `aiterm-vt`. Its public API (`Session`, `Frame`, `VtEvent`, `Modes`) uses only its own types, so the core can be swapped (e.g. for libghostty-vt) without touching the app or the renderer.
+- **Sequence interception:** the PTY reader is wrapped so that `aiterm-intercept` sees every byte before the VT parser. Sequences the parser ignores (OSC 7/9/99/133/777/1337, kitty graphics APC, Sixel DCS) are delivered as `VtEvent::Sequence`; this is the foundation for notifications, progress, shell integration and inline images.
 - **Text:** [glyphon](https://crates.io/crates/glyphon) / cosmic-text. Each row is split into segments: ASCII runs are shaped together, while every non-ASCII glyph (emoji, icons, CJK) is pinned to its own cell, so fallback fonts never shift the grid. Segments are cached per row.
 - **Frames:** rendering happens only on a PTY `Wakeup` and is synced to vsync (`PresentMode::Fifo`), so bursts of updates coalesce into a single frame.
 

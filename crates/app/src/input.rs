@@ -2,7 +2,7 @@
 //!
 //! Stage 2 adds the kitty keyboard protocol (CSI u) on top of this.
 
-use alacritty_terminal::term::TermMode;
+use aiterm_vt::Modes;
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
@@ -12,11 +12,11 @@ fn mod_param(m: ModifiersState) -> u8 {
 }
 
 /// `CSI 1;m X` with modifiers, else SS3/CSI X depending on cursor-key mode.
-fn cursor_key(letter: char, m: ModifiersState, mode: TermMode) -> Vec<u8> {
+fn cursor_key(letter: char, m: ModifiersState, mode: Modes) -> Vec<u8> {
     let p = mod_param(m);
     if p > 1 {
         format!("\x1b[1;{p}{letter}").into_bytes()
-    } else if mode.contains(TermMode::APP_CURSOR) {
+    } else if mode.contains(Modes::APP_CURSOR) {
         format!("\x1bO{letter}").into_bytes()
     } else {
         format!("\x1b[{letter}").into_bytes()
@@ -57,7 +57,7 @@ fn ctrl_byte(c: char) -> Option<u8> {
     }
 }
 
-pub fn encode(event: &KeyEvent, m: ModifiersState, mode: TermMode) -> Option<Vec<u8>> {
+pub fn encode(event: &KeyEvent, m: ModifiersState, mode: Modes) -> Option<Vec<u8>> {
     let alt_prefix = |mut v: Vec<u8>| {
         if m.alt_key() {
             v.insert(0, 0x1b);
@@ -118,8 +118,8 @@ pub fn encode(event: &KeyEvent, m: ModifiersState, mode: TermMode) -> Option<Vec
 }
 
 /// Prepare clipboard text for the PTY, honoring bracketed-paste mode.
-pub fn paste_bytes(text: &str, mode: TermMode) -> Vec<u8> {
-    if mode.contains(TermMode::BRACKETED_PASTE) {
+pub fn paste_bytes(text: &str, mode: Modes) -> Vec<u8> {
+    if mode.contains(Modes::BRACKETED_PASTE) {
         // Strip ESC so pasted text can't terminate the bracket early.
         let clean: String = text.chars().filter(|&c| c != '\x1b').collect();
         format!("\x1b[200~{clean}\x1b[201~").into_bytes()
@@ -143,20 +143,17 @@ mod tests {
     #[test]
     fn modifier_params() {
         let shift_ctrl = ModifiersState::SHIFT | ModifiersState::CONTROL;
-        assert_eq!(cursor_key('A', shift_ctrl, TermMode::empty()), b"\x1b[1;6A");
-        assert_eq!(
-            cursor_key('A', ModifiersState::empty(), TermMode::APP_CURSOR),
-            b"\x1bOA"
-        );
+        assert_eq!(cursor_key('A', shift_ctrl, Modes::empty()), b"\x1b[1;6A");
+        assert_eq!(cursor_key('A', ModifiersState::empty(), Modes::APP_CURSOR), b"\x1bOA");
         assert_eq!(tilde_key(3, ModifiersState::ALT), b"\x1b[3;3~");
     }
 
     #[test]
     fn paste_is_bracketed_and_sanitized() {
         assert_eq!(
-            paste_bytes("a\x1b[201~b", TermMode::BRACKETED_PASTE),
+            paste_bytes("a\x1b[201~b", Modes::BRACKETED_PASTE),
             b"\x1b[200~a[201~b\x1b[201~"
         );
-        assert_eq!(paste_bytes("a\nb\r\nc", TermMode::empty()), b"a\rb\rc");
+        assert_eq!(paste_bytes("a\nb\r\nc", Modes::empty()), b"a\rb\rc");
     }
 }

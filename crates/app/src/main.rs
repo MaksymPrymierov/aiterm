@@ -1,15 +1,10 @@
 mod input;
-mod render;
-mod session;
-mod theme;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::event::Event as TermEvent;
-use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::selection::SelectionType;
-use alacritty_terminal::term::{ClipboardType, TermMode};
+use aiterm_render::Renderer;
+use aiterm_vt::{ClipboardKind, Modes, Rgb, Scroll, SelectionKind, Session, Theme, VtEvent};
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -19,9 +14,18 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::window::{Window, WindowId};
 
-use render::Renderer;
-use session::{Session, UserEvent};
-use theme::{Rgb, Theme};
+/// Events delivered to the winit event loop from other threads.
+#[derive(Debug)]
+enum UserEvent {
+    Vt(VtEvent),
+}
+
+fn linux_kind(kind: ClipboardKind) -> LinuxClipboardKind {
+    match kind {
+        ClipboardKind::Clipboard => LinuxClipboardKind::Clipboard,
+        ClipboardKind::Primary => LinuxClipboardKind::Primary,
+    }
+}
 
 struct App {
     proxy: EventLoopProxy<UserEvent>,
@@ -60,7 +64,7 @@ impl App {
     fn paste(&mut self, kind: LinuxClipboardKind) {
         let Some(text) = self.clipboard_get(kind) else { return };
         if let Some(st) = &self.state {
-            st.session.input(input::paste_bytes(&text, st.session.mode()));
+            st.session.input(input::paste_bytes(&text, st.session.modes()));
         }
     }
 
@@ -73,10 +77,7 @@ impl App {
 
     fn resize_grid(st: &mut WindowState) {
         let size = st.renderer.grid_size();
-        if size.cols != st.session.size.cols
-            || size.rows != st.session.size.rows
-            || size.cell_w != st.session.size.cell_w
-        {
+        if size != st.session.size() {
             st.session.resize(size);
         }
         st.renderer.window().request_redraw();
@@ -121,21 +122,22 @@ impl App {
         true
     }
 
-    fn mouse_reporting(st: &WindowState) -> Option<TermMode> {
-        let mode = st.session.mode();
-        (mode.intersects(TermMode::MOUSE_MODE) && !st.modifiers.shift_key()).then_some(mode)
+    fn mouse_reporting(st: &WindowState) -> Option<Modes> {
+        let mode = st.session.modes();
+        (mode.intersects(Modes::MOUSE_ANY) && !st.modifiers.shift_key()).then_some(mode)
     }
 
     /// Send a mouse event to the application (SGR or legacy X10 encoding).
-    fn report_mouse(st: &WindowState, mode: TermMode, button: u8, pressed: bool, motion: bool) {
+    fn report_mouse(st: &WindowState, mode: Modes, button: u8, pressed: bool, motion: bool) {
         let (row, col, _) = st.renderer.cell_at(st.cursor_pos.x, st.cursor_pos.y);
-        let (row, col) = (row.min(st.session.size.rows - 1), col.min(st.session.size.cols - 1));
+        let size = st.session.size();
+        let (row, col) = (row.min(size.rows - 1), col.min(size.cols - 1));
         let m = st.modifiers;
         let mut b = button as u32 + 4 * m.shift_key() as u32 + 8 * m.alt_key() as u32 + 16 * m.control_key() as u32;
         if motion {
             b += 32;
         }
-        let bytes = if mode.contains(TermMode::SGR_MOUSE) {
+        let bytes = if mode.contains(Modes::SGR_MOUSE) {
             format!("\x1b[<{b};{};{}{}", col + 1, row + 1, if pressed { 'M' } else { 'm' }).into_bytes()
         } else {
             let b = if pressed { b } else { 3 + (b & !3) };
@@ -147,17 +149,15 @@ impl App {
         st.session.write(bytes);
     }
 
-    fn handle_term_event(&mut self, event: TermEvent, event_loop: &ActiveEventLoop) {
+    fn handle_vt_event(&mut self, event: VtEvent, event_loop: &ActiveEventLoop) {
         let Some(st) = self.state.as_mut() else { return };
         match event {
-            TermEvent::Wakeup | TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {
-                st.renderer.window().request_redraw()
-            }
-            TermEvent::Title(t) => st.renderer.window().set_title(&t),
-            TermEvent::ResetTitle => st.renderer.window().set_title("aiterm"),
-            TermEvent::PtyWrite(s) => st.session.write(s.into_bytes()),
-            TermEvent::TextAreaSizeRequest(f) => st.session.write(f(st.session.window_size()).into_bytes()),
-            TermEvent::ColorRequest(idx, f) => {
+            VtEvent::Wakeup => st.renderer.window().request_redraw(),
+            VtEvent::Title(t) => st.renderer.window().set_title(&t),
+            VtEvent::ResetTitle => st.renderer.window().set_title("aiterm"),
+            VtEvent::PtyWrite(s) => st.session.write(s.into_bytes()),
+            VtEvent::TextAreaSizeRequest(reply) => st.session.write(reply(st.session.size()).into_bytes()),
+            VtEvent::ColorRequest(idx, reply) => {
                 let rgb = match idx {
                     256 => self.theme.foreground,
                     257 => self.theme.background,
@@ -165,38 +165,25 @@ impl App {
                     i if i < 256 => self.palette[i],
                     _ => self.theme.foreground,
                 };
-                let c = alacritty_terminal::vte::ansi::Rgb {
-                    r: rgb.r,
-                    g: rgb.g,
-                    b: rgb.b,
-                };
-                st.session.write(f(c).into_bytes());
+                st.session.write(reply(rgb).into_bytes());
             }
-            TermEvent::ClipboardStore(ty, text) => {
-                let kind = match ty {
-                    ClipboardType::Clipboard => LinuxClipboardKind::Clipboard,
-                    ClipboardType::Selection => LinuxClipboardKind::Primary,
-                };
-                self.clipboard_set(kind, text);
-            }
-            TermEvent::ClipboardLoad(ty, f) => {
-                let kind = match ty {
-                    ClipboardType::Clipboard => LinuxClipboardKind::Clipboard,
-                    ClipboardType::Selection => LinuxClipboardKind::Primary,
-                };
-                let text = self.clipboard_get(kind).unwrap_or_default();
+            VtEvent::ClipboardStore(kind, text) => self.clipboard_set(linux_kind(kind), text),
+            VtEvent::ClipboardLoad(kind, reply) => {
+                let text = self.clipboard_get(linux_kind(kind)).unwrap_or_default();
                 if let Some(st) = &self.state {
-                    st.session.write(f(&text).into_bytes());
+                    st.session.write(reply(&text).into_bytes());
                 }
             }
-            TermEvent::Bell => {
+            VtEvent::Bell => {
                 if !st.focused {
                     st.renderer
                         .window()
                         .request_user_attention(Some(winit::window::UserAttentionType::Informational));
                 }
             }
-            TermEvent::Exit | TermEvent::ChildExit(_) => event_loop.exit(),
+            // Notifications, progress, shell integration and images are handled in later milestones.
+            VtEvent::Sequence(seq) => log::debug!("intercepted: {seq:?}"),
+            VtEvent::Exit => event_loop.exit(),
         }
     }
 }
@@ -214,7 +201,11 @@ impl ApplicationHandler<UserEvent> for App {
         window.set_ime_allowed(true);
 
         let renderer = pollster::block_on(Renderer::new(window.clone(), event_loop));
-        let session = match Session::spawn(self.proxy.clone(), renderer.grid_size(), self.command.take()) {
+        let proxy = self.proxy.clone();
+        let on_event = move |e| {
+            let _ = proxy.send_event(UserEvent::Vt(e));
+        };
+        let session = match Session::spawn(renderer.grid_size(), self.command.take(), on_event) {
             Ok(s) => s,
             Err(e) => {
                 log::error!("failed to spawn shell: {e}");
@@ -236,7 +227,7 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::Term(e) => self.handle_term_event(e, event_loop),
+            UserEvent::Vt(e) => self.handle_vt_event(e, event_loop),
         }
     }
 
@@ -287,7 +278,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Focused(f) => {
                 st.focused = f;
                 st.session.set_focused(f);
-                if st.session.mode().contains(TermMode::FOCUS_IN_OUT) {
+                if st.session.modes().contains(Modes::FOCUS_IN_OUT) {
                     st.session.write(if f { &b"\x1b[I"[..] } else { &b"\x1b[O"[..] });
                 }
                 st.renderer.window().request_redraw();
@@ -295,7 +286,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ModifiersChanged(m) => st.modifiers = m.state(),
             WindowEvent::KeyboardInput { event: key, .. } => {
                 if key.state == ElementState::Pressed
-                    && let Some(bytes) = input::encode(&key, st.modifiers, st.session.mode())
+                    && let Some(bytes) = input::encode(&key, st.modifiers, st.session.modes())
                 {
                     st.session.input(bytes);
                 }
@@ -308,8 +299,8 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(mode) = Self::mouse_reporting(st) {
                     let moved = (old.0, old.1) != (row, col);
                     let report = match st.mouse_down {
-                        Some(_) => mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION),
-                        None => mode.contains(TermMode::MOUSE_MOTION),
+                        Some(_) => mode.intersects(Modes::MOUSE_DRAG | Modes::MOUSE_MOTION),
+                        None => mode.contains(Modes::MOUSE_MOTION),
                     };
                     if moved && report {
                         let b = match st.mouse_down {
@@ -345,10 +336,10 @@ impl ApplicationHandler<UserEvent> for App {
                     };
                     st.last_click = Some((now, row, col, clicks));
                     let ty = match clicks {
-                        2 => SelectionType::Semantic,
-                        3 => SelectionType::Lines,
-                        _ if st.modifiers.control_key() => SelectionType::Block,
-                        _ => SelectionType::Simple,
+                        2 => SelectionKind::Word,
+                        3 => SelectionKind::Line,
+                        _ if st.modifiers.control_key() => SelectionKind::Block,
+                        _ => SelectionKind::Simple,
                     };
                     st.session.start_selection(ty, row, col, side);
                     st.renderer.window().request_redraw();
@@ -368,14 +359,14 @@ impl ApplicationHandler<UserEvent> for App {
                 if n == 0 {
                     return;
                 }
-                let mode = st.session.mode();
+                let mode = st.session.modes();
                 if let Some(mode) = Self::mouse_reporting(st) {
                     let b = if n > 0 { 64 } else { 65 };
                     for _ in 0..n.unsigned_abs().min(10) {
                         Self::report_mouse(st, mode, b, true, false);
                     }
-                } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
-                    let seq: &[u8] = match (n > 0, mode.contains(TermMode::APP_CURSOR)) {
+                } else if mode.contains(Modes::ALT_SCREEN | Modes::ALTERNATE_SCROLL) {
+                    let seq: &[u8] = match (n > 0, mode.contains(Modes::APP_CURSOR)) {
                         (true, true) => b"\x1bOA",
                         (true, false) => b"\x1b[A",
                         (false, true) => b"\x1bOB",

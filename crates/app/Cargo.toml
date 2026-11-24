@@ -1,0 +1,16 @@
+[package]
+name = "aiterm"
+description = "GPU-accelerated terminal emulator for working with AI coding agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiterm-render.workspace = true
+aiterm-vt.workspace = true
+arboard.workspace = true
+env_logger.workspace = true
+log.workspace = true
+pollster.workspace = true
+winit.workspace = true

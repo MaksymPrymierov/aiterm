@@ -51,15 +51,40 @@ dependencies = [
 name = "aiterm"
 version = "0.1.0"
 dependencies = [
- "alacritty_terminal",
+ "aiterm-render",
+ "aiterm-vt",
  "arboard",
- "bytemuck",
  "env_logger",
- "glyphon",
  "log",
  "pollster",
+ "winit",
+]
+
+[[package]]
+name = "aiterm-intercept"
+version = "0.1.0"
+
+[[package]]
+name = "aiterm-render"
+version = "0.1.0"
+dependencies = [
+ "aiterm-vt",
+ "bytemuck",
+ "glyphon",
+ "log",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "aiterm-vt"
+version = "0.1.0"
+dependencies = [
+ "aiterm-intercept",
+ "alacritty_terminal",
+ "bitflags 2.13.2",
+ "log",
+ "polling",
 ]
 
 [[package]]

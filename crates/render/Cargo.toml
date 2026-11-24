@@ -1,0 +1,15 @@
+[package]
+name = "aiterm-render"
+description = "wgpu renderer for aiterm frames"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiterm-vt.workspace = true
+bytemuck.workspace = true
+glyphon.workspace = true
+log.workspace = true
+wgpu.workspace = true
+winit.workspace = true
