@@ -32,6 +32,7 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 - Mouse selection: simple, word (double-click), line (triple-click), block (Ctrl)
 - Clipboard and primary selection (copy on select, paste with middle click)
 - Bracketed paste
+- Synchronized output (DEC mode 2026): applications that wrap redraws in `CSI ? 2026 h` … `CSI ? 2026 l` (like Claude Code) never show a half-drawn frame; support is reported via DECRQM, and an unterminated update times out after 150 ms
 - 50,000-line scrollback; the view stays put when new output arrives while you are scrolled up
 - OSC 52 (clipboard from applications), color queries, window title
 
@@ -39,7 +40,7 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 
 | Version | Scope |
 |---|---|
-| 0.2 | ~~Kitty keyboard protocol~~ (done), synchronized output, desktop notifications (OSC 9/777/99), progress (OSC 9;4), OSC 7/8/133 |
+| 0.2 | ~~Kitty keyboard protocol~~ (done), ~~synchronized output~~ (done), desktop notifications (OSC 9/777/99), progress (OSC 9;4), OSC 7/8/133 |
 | 0.3 | Tabs and splits, per-tab session status indicator |
 | 0.4 | Inline images: kitty graphics protocol, Sixel, iTerm2 inline images |
 | 0.5 | TOML config with hot reload, themes, GUI color editor, command palette |
