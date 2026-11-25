@@ -31,6 +31,7 @@
 
 pub mod notification;
 pub mod progress;
+pub mod shell;
 
 /// Default upper bound for a single sequence payload (kitty graphics and Sixel
 /// payloads can be large).

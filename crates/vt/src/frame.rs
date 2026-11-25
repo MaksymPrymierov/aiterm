@@ -32,6 +32,8 @@ pub struct CellView {
     pub fg: Rgb,
     pub bg: Rgb,
     pub flags: CellFlags,
+    /// OSC 8 hyperlink, as an index into [`Frame::links`].
+    pub link: Option<u16>,
 }
 
 impl CellView {
@@ -42,6 +44,7 @@ impl CellView {
             fg,
             bg,
             flags: CellFlags::empty(),
+            link: None,
         }
     }
 }
@@ -71,6 +74,21 @@ pub struct Frame {
     /// `None` when the cursor is hidden or scrolled out of view.
     pub cursor: Option<Cursor>,
     pub background: Rgb,
+    /// Default text color, for UI elements drawn over the grid.
+    pub foreground: Rgb,
+    /// Hyperlinks referenced by [`CellView::link`].
+    pub links: Vec<Link>,
+    /// Link under the mouse pointer (set by the app), drawn highlighted.
+    pub hovered_link: Option<u16>,
+    /// Viewport rows that start a shell prompt (OSC 133).
+    pub prompt_rows: Vec<usize>,
+}
+
+/// An OSC 8 hyperlink. Cells belong to the same link when both id and URI match.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Link {
+    pub id: String,
+    pub uri: String,
 }
 
 impl Frame {

@@ -1,5 +1,6 @@
 mod desktop_notify;
 mod input;
+mod links;
 mod notifications;
 mod perf;
 mod progress;
@@ -9,7 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aiterm_render::{ProgressBar, Renderer};
-use aiterm_vt::{ClipboardKind, Modes, Rgb, Scroll, SelectionKind, Session, Theme, VtEvent};
+use aiterm_vt::shell::ShellEvent;
+use aiterm_vt::{ClipboardKind, Link, Modes, Rgb, Scroll, SelectionKind, Session, Theme, VtEvent};
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -17,7 +19,7 @@ use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, W
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::wayland::WindowAttributesExtWayland;
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 /// Events delivered to the winit event loop from other threads.
 #[derive(Debug)]
@@ -25,6 +27,9 @@ enum UserEvent {
     Vt(VtEvent),
     Desktop(desktop_notify::DesktopEvent),
 }
+
+/// Largest clipboard write accepted from OSC 52.
+const OSC52_MAX_BYTES: usize = 1024 * 1024;
 
 fn linux_kind(kind: ClipboardKind) -> LinuxClipboardKind {
     match kind {
@@ -38,6 +43,8 @@ struct App {
     theme: Theme,
     palette: [Rgb; 256],
     clipboard: Option<Clipboard>,
+    /// Host name, to accept local `file://` URLs (OSC 7, OSC 8).
+    hostname: String,
     command: Option<Vec<String>>,
     notifications: notifications::Notifications<desktop_notify::DesktopNotifier>,
     state: Option<WindowState>,
@@ -63,6 +70,10 @@ struct WindowState {
     progress: progress::SessionProgress,
     /// Start of the progress animation clock.
     started: Instant,
+    /// Working directory reported by the shell (OSC 7).
+    cwd: Option<std::path::PathBuf>,
+    /// OSC 8 hyperlink under the mouse pointer.
+    hover_link: Option<Link>,
 }
 
 impl App {
@@ -105,8 +116,13 @@ impl App {
         let Some(st) = self.state.as_mut() else { return false };
         let m = st.modifiers;
         let ctrl_shift = m.control_key() && m.shift_key();
+        // Match letters by physical key, so shortcuts work in any keyboard layout.
+        let physical = match event.physical_key {
+            PhysicalKey::Code(code) => input::us_layout_char(code),
+            PhysicalKey::Unidentified(_) => None,
+        };
         let key = match &event.logical_key {
-            Key::Character(s) => s.to_lowercase(),
+            Key::Character(s) => physical.map_or_else(|| s.to_lowercase(), String::from),
             Key::Named(NamedKey::PageUp) if m.shift_key() => {
                 st.session.scroll(Scroll::PageUp);
                 st.renderer.window().request_redraw();
@@ -121,6 +137,16 @@ impl App {
         };
         match key.as_str() {
             "c" if ctrl_shift => self.copy_selection(LinuxClipboardKind::Clipboard),
+            // Previous / next shell prompt (OSC 133), as in kitty.
+            "z" | "x" if ctrl_shift => {
+                if st.session.jump_to_prompt(key == "z") {
+                    st.renderer.window().request_redraw();
+                }
+            }
+            "n" if ctrl_shift => {
+                let cwd = st.cwd.clone().or_else(|| links::process_cwd(st.session.child_pid()));
+                links::new_window(cwd.as_deref());
+            }
             "v" if ctrl_shift => self.paste(LinuxClipboardKind::Clipboard),
             "+" | "=" if m.control_key() => {
                 st.renderer.adjust_font_size(Some(1.0));
@@ -193,7 +219,17 @@ impl App {
                 };
                 st.session.write(reply(rgb).into_bytes());
             }
-            VtEvent::ClipboardStore(kind, text) => self.clipboard_set(linux_kind(kind), text),
+            VtEvent::ClipboardStore(kind, text) => {
+                // OSC 52: only while the user is looking at this terminal, and
+                // bounded, so background output can't silently replace the clipboard.
+                if !st.focused {
+                    log::warn!("OSC 52 clipboard write ignored: window is not focused");
+                } else if text.len() > OSC52_MAX_BYTES {
+                    log::warn!("OSC 52 clipboard write ignored: {} bytes exceeds the limit", text.len());
+                } else {
+                    self.clipboard_set(linux_kind(kind), text);
+                }
+            }
             VtEvent::ClipboardLoad(kind, reply) => {
                 let text = self.clipboard_get(linux_kind(kind)).unwrap_or_default();
                 if let Some(st) = &self.state {
@@ -210,6 +246,18 @@ impl App {
             // Notifications, progress, shell integration and images are handled in later milestones.
             VtEvent::Sequence(seq) => {
                 log::debug!("intercepted: {seq:?}");
+                if let Some(event) = aiterm_vt::shell::parse_shell_event(&seq, &self.hostname) {
+                    match event {
+                        ShellEvent::Cwd(dir) => st.cwd = Some(dir),
+                        // The shell now waits for input: the cursor is on the prompt line.
+                        ShellEvent::PromptEnd => {
+                            st.session.mark_prompt();
+                            st.renderer.window().request_redraw();
+                        }
+                        ShellEvent::PromptStart | ShellEvent::CommandStart | ShellEvent::CommandEnd(_) => {}
+                    }
+                    return;
+                }
                 if let Some(report) = aiterm_vt::progress::parse_progress(&seq) {
                     st.progress.apply(report, Instant::now());
                     st.renderer.window().request_redraw();
@@ -251,6 +299,7 @@ impl ApplicationHandler<UserEvent> for App {
             .with_name("aiterm", "aiterm");
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         window.set_ime_allowed(true);
+        window.set_cursor(CursorIcon::Text);
 
         let renderer = pollster::block_on(Renderer::new(window.clone(), event_loop));
         let proxy = self.proxy.clone();
@@ -279,6 +328,8 @@ impl ApplicationHandler<UserEvent> for App {
             title: String::new(),
             progress: progress::SessionProgress::default(),
             started: Instant::now(),
+            cwd: None,
+            hover_link: None,
         });
     }
 
@@ -383,6 +434,17 @@ impl ApplicationHandler<UserEvent> for App {
                 let old = st.renderer.cell_at(st.cursor_pos.x, st.cursor_pos.y);
                 st.cursor_pos = position;
                 let (row, col, side) = st.renderer.cell_at(position.x, position.y);
+                let link = st.session.link_at(row, col);
+                if link != st.hover_link {
+                    let icon = if link.is_some() {
+                        CursorIcon::Pointer
+                    } else {
+                        CursorIcon::Text
+                    };
+                    st.renderer.window().set_cursor(icon);
+                    st.hover_link = link;
+                    st.renderer.window().request_redraw();
+                }
                 if let Some(mode) = Self::mouse_reporting(st) {
                     let moved = (old.0, old.1) != (row, col);
                     let report = match st.mouse_down {
@@ -401,6 +463,19 @@ impl ApplicationHandler<UserEvent> for App {
                 } else if st.mouse_down == Some(MouseButton::Left) {
                     st.session.update_selection(row, col, side);
                     st.renderer.window().request_redraw();
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if st.modifiers.control_key() && st.hover_link.is_some() => {
+                // Ctrl+click opens the hyperlink under the pointer.
+                let uri = &st.hover_link.as_ref().unwrap().uri;
+                if links::is_openable(uri, &self.hostname) {
+                    links::open(uri);
+                } else {
+                    log::warn!("refusing to open hyperlink {uri:?}");
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -467,7 +542,12 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 let start = Instant::now();
-                let frame = st.session.snapshot(&self.theme, &self.palette, st.focused);
+                let mut frame = st.session.snapshot(&self.theme, &self.palette, st.focused);
+                frame.hovered_link = st
+                    .hover_link
+                    .as_ref()
+                    .and_then(|l| frame.links.iter().position(|x| x == l))
+                    .map(|i| i as u16);
                 let snapshot = start.elapsed();
                 let bar = st.progress.shown().map(|shown| ProgressBar {
                     fraction: shown.fraction,
@@ -478,7 +558,8 @@ impl ApplicationHandler<UserEvent> for App {
                     },
                     phase: st.started.elapsed().as_secs_f32(),
                 });
-                st.renderer.render(&frame, bar.as_ref());
+                let status = st.hover_link.as_ref().map(|l| l.uri.as_str());
+                st.renderer.render(&frame, bar.as_ref(), status);
                 st.stats.frame(snapshot, start.elapsed() - snapshot);
                 if st.progress.is_animated() {
                     // Paced by frame callbacks: one frame per display refresh while visible.
@@ -512,6 +593,7 @@ fn main() {
         palette: theme.palette256(),
         theme,
         clipboard: Clipboard::new().map_err(|e| log::warn!("no clipboard: {e}")).ok(),
+        hostname: links::local_hostname(),
         command,
         state: None,
     };

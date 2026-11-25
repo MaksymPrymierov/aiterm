@@ -389,7 +389,7 @@ fn keypad_char(c: char) -> Option<u32> {
 }
 
 /// The character a physical key produces in the US PC-101 layout.
-fn us_layout_char(code: KeyCode) -> Option<char> {
+pub fn us_layout_char(code: KeyCode) -> Option<char> {
     use KeyCode::*;
     let letters = [
         KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR,

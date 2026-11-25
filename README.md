@@ -34,16 +34,19 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 - Bracketed paste
 - Desktop notifications from applications via OSC 9 (iTerm2), OSC 777 (rxvt/VTE/Ghostty) and OSC 99 (kitty protocol: chunked/base64 payloads, urgency, occasion, close, capability queries, activation and close reports), delivered through the freedesktop notification service over D-Bus; OSC 9/777 only notify while the window is unfocused, with a rate limit of 5 per 10 s
 - Progress reporting via `OSC 9 ; 4` (ConEmu/Windows Terminal protocol): a thin bar along the top edge shows normal (blue), error (red), paused (yellow) and indeterminate (animated) states; reports not refreshed for 15 s are cleared, so a crashed program never leaves a stale bar
+- Hyperlinks (OSC 8): underlined, highlighted on hover with the real target shown in the bottom-left corner; Ctrl+click opens `http(s)`, `mailto` and local `file://` links via `xdg-open`
+- Shell integration: OSC 7 working directory (Ctrl+Shift+N opens a new window there; falls back to the shell's `/proc` cwd) and OSC 133 prompt marks, shown in the left margin, with Ctrl+Shift+Z / Ctrl+Shift+X to jump to the previous / next prompt
+- OSC 52 clipboard writes are accepted only while the window is focused and up to 1 MiB; applications can never read the clipboard
 - Synchronized output (DEC mode 2026): applications that wrap redraws in `CSI ? 2026 h` … `CSI ? 2026 l` (like Claude Code) never show a half-drawn frame; support is reported via DECRQM, and an unterminated update times out after 150 ms
 - Frame pacing tied to the compositor: at most one render per display refresh and none while the window is hidden; heavy output (e.g. `seq 1 10000000`) keeps full frame rate with ~4 ms key-to-application latency
 - 50,000-line scrollback; the view stays put when new output arrives while you are scrolled up
-- OSC 52 (clipboard from applications), color queries, window title
+- Color queries, window title
 
 ### Roadmap
 
 | Version | Scope |
 |---|---|
-| 0.2 | ~~Kitty keyboard protocol~~ (done), ~~synchronized output~~ (done), ~~desktop notifications (OSC 9/777/99)~~ (done), ~~progress (OSC 9;4)~~ (done), OSC 7/8/133 |
+| 0.2 | ~~Kitty keyboard protocol~~ (done), ~~synchronized output~~ (done), ~~desktop notifications (OSC 9/777/99)~~ (done), ~~progress (OSC 9;4)~~ (done), ~~OSC 7/8/133~~ (done) |
 | 0.3 | Tabs and splits, per-tab session status indicator |
 | 0.4 | Inline images: kitty graphics protocol, Sixel, iTerm2 inline images |
 | 0.5 | TOML config with hot reload, themes, GUI color editor, command palette |
@@ -88,6 +91,9 @@ aiterm -e htop
 | <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>-</kbd> / <kbd>0</kbd> | Increase / decrease / reset font size |
 | <kbd>Shift</kbd>+<kbd>Enter</kbd> | Newline in Claude Code: `CSI 13;2u` with the kitty protocol, `ESC CR` otherwise |
 | <kbd>Shift</kbd> + mouse | Select text even when an application captures the mouse |
+| <kbd>Ctrl</kbd> + click | Open the hyperlink under the pointer |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>X</kbd> | Jump to the previous / next shell prompt (needs OSC 133 shell integration) |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> | New window in the current directory |
 
 ### Configuration
 

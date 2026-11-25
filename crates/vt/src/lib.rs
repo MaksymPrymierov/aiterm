@@ -10,7 +10,7 @@ mod pty;
 mod session;
 mod theme;
 
-pub use aiterm_intercept::{Sequence, notification, progress};
-pub use frame::{CellFlags, CellView, Cursor, CursorShape, Frame};
+pub use aiterm_intercept::{Sequence, notification, progress, shell};
+pub use frame::{CellFlags, CellView, Cursor, CursorShape, Frame, Link};
 pub use session::{ClipboardKind, GridSize, Modes, Reply, Scroll, SelectionKind, Session, Side, TextReply, VtEvent};
 pub use theme::{Rgb, Theme};

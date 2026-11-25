@@ -22,7 +22,7 @@ use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::{self, Color, NamedColor};
 use bitflags::bitflags;
 
-use crate::frame::{CellFlags, CellView, Cursor, CursorShape, Frame};
+use crate::frame::{CellFlags, CellView, Cursor, CursorShape, Frame, Link};
 use crate::pty::TapPty;
 use crate::theme::{Rgb, Theme};
 
@@ -257,7 +257,12 @@ pub struct Session {
     wakeup_pending: Arc<AtomicBool>,
     notifier: Notifier,
     size: GridSize,
+    pid: u32,
 }
+
+/// Spare cell flag bit marking the first cell of a shell prompt line.
+/// alacritty_terminal 0.26 uses bits 0..=14 (see `prompt_mark_bit_is_unused`).
+const PROMPT_MARK: Flags = Flags::from_bits_retain(0x8000);
 
 impl Session {
     /// Spawn `command` (or the user's shell) in a new PTY. `on_event` is
@@ -294,6 +299,9 @@ impl Session {
             // Mode stack handling (push/pop/set/query) is done by alacritty_terminal;
             // key encoding lives in the app.
             kitty_keyboard: true,
+            // OSC 52: applications may copy to the clipboard but never read it.
+            // The app applies further limits (focus, size).
+            osc52: term::Osc52::OnlyCopy,
             ..Default::default()
         };
         let term = Term::new(config, &TermSize::new(size.cols, size.rows), listener.clone());
@@ -305,7 +313,9 @@ impl Session {
                 tap(VtEvent::Sequence(seq));
             }
         });
-        let pty = TapPty::new(tty::new(&options, size.window_size(), 0)?, sink)?;
+        let pty = tty::new(&options, size.window_size(), 0)?;
+        let pid = pty.child().id();
+        let pty = TapPty::new(pty, sink)?;
         let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
         let notifier = Notifier(event_loop.channel());
         event_loop.spawn();
@@ -315,11 +325,76 @@ impl Session {
             wakeup_pending,
             notifier,
             size,
+            pid,
         })
     }
 
     pub fn size(&self) -> GridSize {
         self.size
+    }
+
+    /// Process id of the shell (or command) running in the PTY.
+    pub fn child_pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Mark the line under the cursor as the start of a shell prompt.
+    ///
+    /// Called when the shell reports the end of its prompt (OSC 133;B), when
+    /// the cursor is on the input line. The mark is a spare bit in the flags of
+    /// the line's first cell, so it moves with scrolling and reflow and
+    /// disappears when the line is cleared.
+    pub fn mark_prompt(&self) {
+        let mut term = self.term.lock();
+        if term.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        let line = term.grid().cursor.point.line;
+        term.grid_mut()[Point::new(line, Column(0))].flags.insert(PROMPT_MARK);
+    }
+
+    /// Scroll so the previous (`up`) or next prompt is at the top of the
+    /// viewport. Returns false if there is no such prompt.
+    pub fn jump_to_prompt(&self, up: bool) -> bool {
+        let mut term = self.term.lock();
+        if term.mode().contains(TermMode::ALT_SCREEN) {
+            return false;
+        }
+        let offset = term.grid().display_offset() as i32;
+        let history = (term.total_lines() - term.screen_lines()) as i32;
+        let bottom = term.screen_lines() as i32 - 1;
+        let top = -offset;
+        let is_prompt = |line: i32| term.grid()[Line(line)][Column(0)].flags.contains(PROMPT_MARK);
+        let target = if up {
+            (-history..top).rev().find(|&l| is_prompt(l))
+        } else {
+            (top + 1..=bottom).find(|&l| is_prompt(l))
+        };
+        let Some(target) = target else {
+            if !up && offset != 0 {
+                term.scroll_display(grid::Scroll::Bottom);
+                return true;
+            }
+            return false;
+        };
+        // New offset puts `target` on the first row, clamped to the history.
+        let new_offset = (-target).clamp(0, history);
+        term.scroll_display(grid::Scroll::Delta(new_offset - offset));
+        true
+    }
+
+    /// The OSC 8 hyperlink at a viewport cell.
+    pub fn link_at(&self, row: usize, col: usize) -> Option<Link> {
+        let term = self.term.lock();
+        if row >= term.screen_lines() || col >= term.columns() {
+            return None;
+        }
+        let point = Self::grid_point(&term, row, col);
+        let link = term.grid()[point].hyperlink()?;
+        Some(Link {
+            id: link.id().to_string(),
+            uri: link.uri().to_string(),
+        })
     }
 
     /// Write raw bytes to the PTY.
@@ -418,6 +493,8 @@ impl Session {
         };
 
         let mut cells = vec![CellView::blank(theme.foreground, theme.background); cols * rows];
+        let mut links: Vec<Link> = Vec::new();
+        let mut prompt_rows = Vec::new();
         let selection = content.selection;
 
         for indexed in content.display_iter {
@@ -443,6 +520,20 @@ impl Session {
                 bg = theme.selection_bg;
             }
 
+            if col == 0 && flags.contains(PROMPT_MARK) {
+                prompt_rows.push(row as usize);
+            }
+            let link = cell.hyperlink().map(|h| {
+                let link = Link {
+                    id: h.id().to_string(),
+                    uri: h.uri().to_string(),
+                };
+                let idx = links.iter().position(|l| *l == link).unwrap_or_else(|| {
+                    links.push(link);
+                    links.len() - 1
+                });
+                idx as u16
+            });
             let zerowidth = cell.zerowidth().map(|z| z.iter().collect::<String>());
             cells[row as usize * cols + col] = CellView {
                 c: cell.c,
@@ -450,6 +541,7 @@ impl Session {
                 fg,
                 bg,
                 flags: cell_flags(flags),
+                link,
             };
         }
 
@@ -491,6 +583,12 @@ impl Session {
             cells,
             cursor,
             background,
+            foreground: content.colors[NamedColor::Foreground]
+                .map(Rgb::from)
+                .unwrap_or(theme.foreground),
+            links,
+            hovered_link: None,
+            prompt_rows,
         }
     }
 }
@@ -566,6 +664,12 @@ mod tests {
         assert!(!is_forwarded(&Sequence::Osc(b"0;title".to_vec())));
         assert!(!is_forwarded(&Sequence::Osc(b"52;c;aGk=".to_vec())));
         assert!(is_forwarded(&Sequence::Apc(b"Ga=T".to_vec())));
+    }
+
+    #[test]
+    fn prompt_mark_bit_is_unused() {
+        // Guards against an alacritty_terminal upgrade that starts using 0x8000.
+        assert!(!Flags::all().intersects(PROMPT_MARK));
     }
 
     #[test]

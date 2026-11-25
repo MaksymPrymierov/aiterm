@@ -76,6 +76,8 @@ pub struct Renderer {
     atlas: TextAtlas,
     text_renderer: TextRenderer,
     rows: Vec<RowCache>,
+    /// Bottom-left status line (e.g. the URI of the hovered link), cached by text.
+    status: Option<(String, Buffer)>,
 
     font_family: String,
     font_size: f32,
@@ -249,6 +251,7 @@ impl Renderer {
             atlas,
             text_renderer,
             rows: Vec::new(),
+            status: None,
             font_family: default_font_family(),
             font_size,
             scale,
@@ -441,6 +444,53 @@ impl Renderer {
         });
     }
 
+    /// Lay out the status line in the bottom-left corner and push its
+    /// background. Returns the text position and color.
+    fn layout_status(&mut self, text: &str, frame: &Frame) -> Option<(f32, f32, Rgb)> {
+        let m = self.metrics;
+        let pad = self.padding();
+        let (width, height) = (self.config.width as f32, self.config.height as f32);
+        // Keep the start and the end of long URIs; the middle matters least.
+        let max_chars = ((width - 4.0 * pad) / m.w).floor().max(8.0) as usize;
+        let chars: Vec<char> = text.chars().collect();
+        let shown: String = if chars.len() > max_chars {
+            let keep = max_chars - 1;
+            let head: String = chars[..keep / 2].iter().collect();
+            let tail: String = chars[chars.len() - (keep - keep / 2)..].iter().collect();
+            format!("{head}…{tail}")
+        } else {
+            text.to_string()
+        };
+        if self.status.as_ref().is_none_or(|(t, _)| *t != shown) {
+            let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(m.font_px, m.h));
+            buffer.set_size(None, Some(m.h));
+            let attrs = Attrs::new().family(Family::Name(&self.font_family));
+            buffer.set_text(&shown, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            self.status = Some((shown.clone(), buffer));
+        }
+        let fg = frame.foreground;
+        let text_w = shown.chars().count() as f32 * m.w;
+        let (x, y) = (pad, height - pad - m.h);
+        let margin = (pad * 0.5).round();
+        self.push_quad(
+            x - margin,
+            y - margin,
+            text_w + 2.0 * margin,
+            m.h + 2.0 * margin,
+            frame.background,
+        );
+        self.push_quad_alpha(
+            x - margin,
+            y - margin,
+            text_w + 2.0 * margin,
+            m.h + 2.0 * margin,
+            fg,
+            0.15,
+        );
+        Some((x, y, fg))
+    }
+
     fn push_progress(&mut self, bar: &ProgressBar) {
         let width = self.config.width as f32;
         let height = (3.0 * self.scale).round().max(2.0);
@@ -461,7 +511,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, frame: &Frame, progress: Option<&ProgressBar>) {
+    pub fn render(&mut self, frame: &Frame, progress: Option<&ProgressBar>, status: Option<&str>) {
         let m = self.metrics;
         let pad = self.padding();
         let (width, height) = (self.config.width, self.config.height);
@@ -506,6 +556,10 @@ impl Renderer {
                 let x = pad + c as f32 * m.w;
                 if cell.flags.contains(Flags::UNDERLINE) {
                     self.push_quad(x, y + m.h - thickness * 2.0, m.w, thickness, cell.fg);
+                } else if let Some(link) = cell.link {
+                    // Hyperlinks: faint underline, solid while hovered.
+                    let alpha = if frame.hovered_link == Some(link) { 1.0 } else { 0.35 };
+                    self.push_quad_alpha(x, y + m.h - thickness * 2.0, m.w, thickness, cell.fg, alpha);
                 }
                 if cell.flags.contains(Flags::STRIKEOUT) {
                     self.push_quad(x, y + m.h / 2.0, m.w, thickness, cell.fg);
@@ -530,9 +584,15 @@ impl Renderer {
                 }
             }
         }
+        // Shell prompt marks (OSC 133): a short bar in the left padding.
+        for &r in &frame.prompt_rows {
+            let w = (pad * 0.3).max(2.0);
+            self.push_quad_alpha((pad - w) / 2.0, pad + r as f32 * m.h, w, m.h, frame.foreground, 0.5);
+        }
         if let Some(bar) = progress {
             self.push_progress(bar);
         }
+        let status_area = status.and_then(|text| self.layout_status(text, frame));
 
         if self.quads.len() > self.instance_cap {
             self.instance_cap = self.quads.len().next_power_of_two();
@@ -554,17 +614,33 @@ impl Renderer {
             right: width as i32,
             bottom: height as i32,
         };
-        let areas = self.rows.iter().enumerate().flat_map(|(r, row)| {
-            row.segments.iter().map(move |s| TextArea {
-                buffer: &s.buffer,
-                left: pad + s.x,
-                top: pad + r as f32 * m.h,
+        let status_text = status_area.and_then(|(x, y, fg)| {
+            self.status.as_ref().map(|(_, buffer)| TextArea {
+                buffer,
+                left: x,
+                top: y,
                 scale: 1.0,
                 bounds,
-                default_color: GColor::rgb(s.fg.r, s.fg.g, s.fg.b),
+                default_color: GColor::rgb(fg.r, fg.g, fg.b),
                 custom_glyphs: &[],
             })
         });
+        let areas = self
+            .rows
+            .iter()
+            .enumerate()
+            .flat_map(|(r, row)| {
+                row.segments.iter().map(move |s| TextArea {
+                    buffer: &s.buffer,
+                    left: pad + s.x,
+                    top: pad + r as f32 * m.h,
+                    scale: 1.0,
+                    bounds,
+                    default_color: GColor::rgb(s.fg.r, s.fg.g, s.fg.b),
+                    custom_glyphs: &[],
+                })
+            })
+            .chain(status_text);
         // Segment colors are carried in default_color; spans have no own color.
         if let Err(e) = self.text_renderer.prepare(
             &self.device,
