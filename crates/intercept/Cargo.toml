@@ -7,3 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+
+[dev-dependencies]
+# Reference parser for the differential test (same version alacritty_terminal uses).
+vte = { version = "0.15", default-features = false, features = ["std"] }
