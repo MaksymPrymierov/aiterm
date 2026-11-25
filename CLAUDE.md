@@ -25,7 +25,7 @@ RUST_LOG=info cargo run -- -e bash   # run with logging; `-e` runs a command ins
 ## CI and releases
 
 - `.github/workflows/ci.yml` runs on pushes and pull requests to `master`: fmt check, clippy (`-D warnings`), tests, release build.
-- `.github/workflows/release.yml` runs on `vX.Y.Z` tags: the tag must equal the workspace `version` in the root `Cargo.toml`, otherwise the release fails. Bump the version (and `Cargo.lock`) before tagging.
+- `.github/workflows/release.yml` runs on `vX.Y.Z` tags: the tag must equal the workspace `version` in the root `Cargo.toml`, otherwise the release fails. Bump the version (and `Cargo.lock`) and add a `## [X.Y.Z] - date` section to `CHANGELOG.md` before tagging; that section becomes the release notes (followed by GitHub's generated change list).
 - The release binary must stay free of system library link dependencies beyond libc (Wayland, xkbcommon and fonts are loaded at runtime), so the CI runner needs no extra packages.
 
 ## Code layout

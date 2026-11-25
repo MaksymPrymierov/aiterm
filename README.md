@@ -4,7 +4,7 @@
 
 A modern GPU-accelerated terminal emulator for Linux (Wayland), built for working with AI coding agents, especially [Claude Code](https://code.claude.com).
 
-> **Status: early development (v0.1, MVP).** aiterm runs a shell and renders TUI applications correctly, but tabs, configuration and inline images are not implemented yet. See the [roadmap](#roadmap).
+> **Status: early development (v0.2).** aiterm runs Claude Code and TUI applications with the modern protocols they rely on (kitty keyboard, synchronized output, notifications, progress, hyperlinks, shell integration), but tabs, configuration and inline images are not implemented yet. See the [roadmap](#roadmap) and the [changelog](CHANGELOG.md).
 
 ## Why another terminal
 
@@ -20,7 +20,7 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 
 ## Features
 
-### Working today (v0.1)
+### Working today (v0.2)
 
 - Native Wayland, HiDPI, GPU rendering (wgpu)
 - 16 / 256 / truecolor; bold, italic, underline, strikethrough, dim, inverse
@@ -46,7 +46,8 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 
 | Version | Scope |
 |---|---|
-| 0.2 | ~~Kitty keyboard protocol~~ (done), ~~synchronized output~~ (done), ~~desktop notifications (OSC 9/777/99)~~ (done), ~~progress (OSC 9;4)~~ (done), ~~OSC 7/8/133~~ (done) |
+| 0.1 ✅ | MVP: GPU rendering, PTY, colors, mouse, clipboard, scrollback |
+| 0.2 ✅ | Kitty keyboard protocol, synchronized output, frame pacing, desktop notifications (OSC 9/777/99), progress (OSC 9;4), hyperlinks (OSC 8), shell integration (OSC 7/133), OSC 52 limits |
 | 0.3 | Tabs and splits, per-tab session status indicator |
 | 0.4 | Inline images: kitty graphics protocol, Sixel, iTerm2 inline images |
 | 0.5 | TOML config with hot reload, themes, GUI color editor, command palette |
@@ -152,12 +153,12 @@ RUST_LOG=aiterm::perf=debug cargo run --release   # fps, wakeups, snapshot/rende
 ### CI and releases
 
 - **CI** (`.github/workflows/ci.yml`) runs on pushes to `master` and on pull requests into `master`: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` and a release build. The binary is uploaded as a workflow artifact.
-- **Releases** (`.github/workflows/release.yml`) run when a `vX.Y.Z` tag is pushed. The workflow checks that the tag matches the crate version, then builds, packages `aiterm` with `README.md` and `LICENSE`, and publishes a GitHub release with a SHA-256 checksum. Tags with a suffix (e.g. `v0.2.0-beta.1`) become pre-releases.
+- **Releases** (`.github/workflows/release.yml`) run when a `vX.Y.Z` tag is pushed. The workflow checks that the tag matches the crate version, then builds, packages `aiterm` with `README.md` and `LICENSE`, and publishes a GitHub release with a SHA-256 checksum; the release notes are the version's section of [CHANGELOG.md](CHANGELOG.md). Tags with a suffix (e.g. `v0.2.0-beta.1`) become pre-releases.
 
 To cut a release:
 
 ```sh
-# bump `version` in the root Cargo.toml, then:
+# bump `version` in the root Cargo.toml and add a section to CHANGELOG.md, then:
 cargo build && git commit -am "Release v0.2.0"
 git tag v0.2.0
 git push origin master v0.2.0

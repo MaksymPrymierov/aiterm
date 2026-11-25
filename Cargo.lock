@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "aiterm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aiterm-render",
  "aiterm-vt",
@@ -63,14 +63,14 @@ dependencies = [
 
 [[package]]
 name = "aiterm-intercept"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "vte",
 ]
 
 [[package]]
 name = "aiterm-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aiterm-vt",
  "bytemuck",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "aiterm-vt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aiterm-intercept",
  "alacritty_terminal",

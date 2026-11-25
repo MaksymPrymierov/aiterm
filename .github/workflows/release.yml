@@ -51,6 +51,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           flags=(--title "aiterm ${GITHUB_REF_NAME}" --generate-notes --verify-tag)
+          # Release notes: this version's CHANGELOG.md section, followed by
+          # GitHub's generated list of changes.
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '/^## \[/ { p = index($0, "## [" v "]") == 1; next } p && !/^\[[^]]*\]: /' CHANGELOG.md > notes.md
+          if [[ -s notes.md ]]; then
+            flags+=(--notes-file notes.md)
+          else
+            echo "::warning::CHANGELOG.md has no section for ${version}"
+          fi
           # Tags like v0.2.0-beta.1 are published as pre-releases.
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             flags+=(--prerelease)
