@@ -1,4 +1,5 @@
 mod input;
+mod perf;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -50,6 +51,7 @@ struct WindowState {
     mouse_down: Option<MouseButton>,
     last_click: Option<(Instant, usize, usize, u8)>,
     scroll_accum: f64,
+    stats: perf::FrameStats,
 }
 
 impl App {
@@ -156,7 +158,10 @@ impl App {
     fn handle_vt_event(&mut self, event: VtEvent, event_loop: &ActiveEventLoop) {
         let Some(st) = self.state.as_mut() else { return };
         match event {
-            VtEvent::Wakeup => st.renderer.window().request_redraw(),
+            VtEvent::Wakeup => {
+                st.stats.wakeup();
+                st.renderer.window().request_redraw();
+            }
             VtEvent::Title(t) => st.renderer.window().set_title(&t),
             VtEvent::ResetTitle => st.renderer.window().set_title("aiterm"),
             VtEvent::PtyWrite(s) => st.session.write(s.into_bytes()),
@@ -227,6 +232,7 @@ impl ApplicationHandler<UserEvent> for App {
             mouse_down: None,
             last_click: None,
             scroll_accum: 0.0,
+            stats: perf::FrameStats::default(),
         });
     }
 
@@ -400,8 +406,11 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                let start = Instant::now();
                 let frame = st.session.snapshot(&self.theme, &self.palette, st.focused);
+                let snapshot = start.elapsed();
                 st.renderer.render(&frame);
+                st.stats.frame(snapshot, start.elapsed() - snapshot);
             }
             _ => {}
         }

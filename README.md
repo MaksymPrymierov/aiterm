@@ -33,6 +33,7 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 - Clipboard and primary selection (copy on select, paste with middle click)
 - Bracketed paste
 - Synchronized output (DEC mode 2026): applications that wrap redraws in `CSI ? 2026 h` … `CSI ? 2026 l` (like Claude Code) never show a half-drawn frame; support is reported via DECRQM, and an unterminated update times out after 150 ms
+- Frame pacing tied to the compositor: at most one render per display refresh and none while the window is hidden; heavy output (e.g. `seq 1 10000000`) keeps full frame rate with ~4 ms key-to-application latency
 - 50,000-line scrollback; the view stays put when new output arrives while you are scrolled up
 - OSC 52 (clipboard from applications), color queries, window title
 
@@ -127,6 +128,7 @@ cargo test             # unit tests
 cargo fmt              # format (max width 120, see rustfmt.toml)
 cargo clippy           # linter (must be warning-free)
 RUST_LOG=info cargo run -- -e bash
+RUST_LOG=aiterm::perf=debug cargo run --release   # fps, wakeups, snapshot/render time per second
 ```
 
 ### CI and releases

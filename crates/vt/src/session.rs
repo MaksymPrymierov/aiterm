@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use aiterm_intercept::Sequence;
 use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
@@ -48,7 +49,8 @@ impl From<ClipboardType> for ClipboardKind {
 
 /// Events emitted by a session. Delivered from the PTY thread.
 pub enum VtEvent {
-    /// New content is available; request a redraw.
+    /// New content is available; request a redraw. Not sent again until
+    /// [`Session::snapshot`] is called.
     Wakeup,
     Title(String),
     ResetTitle,
@@ -89,12 +91,24 @@ type Callback = Arc<dyn Fn(VtEvent) + Send + Sync>;
 
 /// Bridges alacritty_terminal events to [`VtEvent`]s.
 #[derive(Clone)]
-struct Listener(Callback);
+struct Listener {
+    callback: Callback,
+    /// Set when a `Wakeup` was delivered and the frame has not been
+    /// snapshotted yet. The PTY thread emits a wakeup after every parsed
+    /// chunk (up to 64 KiB); under heavy output that is tens of thousands of
+    /// events per second, of which at most one per frame is useful.
+    wakeup_pending: Arc<AtomicBool>,
+}
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
         let event = match event {
-            Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => VtEvent::Wakeup,
+            Event::Wakeup | Event::MouseCursorDirty | Event::CursorBlinkingChange => {
+                if self.wakeup_pending.swap(true, Ordering::AcqRel) {
+                    return;
+                }
+                VtEvent::Wakeup
+            }
             Event::Title(t) => VtEvent::Title(t),
             Event::ResetTitle => VtEvent::ResetTitle,
             Event::Bell => VtEvent::Bell,
@@ -109,7 +123,7 @@ impl EventListener for Listener {
                 VtEvent::TextAreaSizeRequest(Arc::new(move |size: GridSize| f(size.window_size())))
             }
         };
-        (self.0)(event);
+        (self.callback)(event);
     }
 }
 
@@ -240,6 +254,7 @@ pub enum Side {
 
 pub struct Session {
     term: Arc<FairMutex<Term<Listener>>>,
+    wakeup_pending: Arc<AtomicBool>,
     notifier: Notifier,
     size: GridSize,
 }
@@ -269,7 +284,11 @@ impl Session {
             ..Default::default()
         };
 
-        let listener = Listener(Arc::new(on_event));
+        let wakeup_pending = Arc::new(AtomicBool::new(false));
+        let listener = Listener {
+            callback: Arc::new(on_event),
+            wakeup_pending: wakeup_pending.clone(),
+        };
         let config = term::Config {
             scrolling_history: 50_000,
             // Mode stack handling (push/pop/set/query) is done by alacritty_terminal;
@@ -280,7 +299,7 @@ impl Session {
         let term = Term::new(config, &TermSize::new(size.cols, size.rows), listener.clone());
         let term = Arc::new(FairMutex::new(term));
 
-        let tap = listener.0.clone();
+        let tap = listener.callback.clone();
         let sink = Box::new(move |seq: Sequence| {
             if is_forwarded(&seq) {
                 tap(VtEvent::Sequence(seq));
@@ -291,7 +310,12 @@ impl Session {
         let notifier = Notifier(event_loop.channel());
         event_loop.spawn();
 
-        Ok(Self { term, notifier, size })
+        Ok(Self {
+            term,
+            wakeup_pending,
+            notifier,
+            size,
+        })
     }
 
     pub fn size(&self) -> GridSize {
@@ -376,7 +400,12 @@ impl Session {
         self.term.lock().is_focused = focused;
     }
 
+    /// Capture the visible screen. Also re-arms [`VtEvent::Wakeup`]: wakeups
+    /// are coalesced until the next snapshot.
     pub fn snapshot(&self, theme: &Theme, palette: &[Rgb; 256], focused: bool) -> Frame {
+        // Clear before locking: output parsed after this point sends a new wakeup,
+        // output parsed before it is included in this snapshot.
+        self.wakeup_pending.store(false, Ordering::Release);
         let term = self.term.lock();
         let content = term.renderable_content();
         let cols = term.columns();

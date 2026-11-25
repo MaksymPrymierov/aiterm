@@ -119,12 +119,21 @@ impl Renderer {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
+        // Frame pacing comes from Wayland frame callbacks (`pre_present_notify`),
+        // so prefer Mailbox: presenting never blocks the event loop. Fifo is the
+        // always-available fallback.
+        let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+        log::info!("surface: {format:?}, {present_mode:?}");
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -598,6 +607,10 @@ impl Renderer {
             }
         }
         self.queue.submit(Some(encoder.finish()));
+        // Ask the compositor for a frame callback: winit then holds back the next
+        // `RedrawRequested` until the compositor is ready for a new frame (one
+        // render per vblank at most, none while the window is hidden).
+        self.window.pre_present_notify();
         self.queue.present(surface_tex);
         if reconfigure {
             self.surface.configure(&self.device, &self.config);

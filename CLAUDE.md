@@ -34,6 +34,7 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
 
 - `crates/app` (package `aiterm`, the binary)
   - `src/main.rs` — winit `ApplicationHandler`: window/input events, shortcuts, mouse reporting, clipboard, handling of `VtEvent`s.
+  - `src/perf.rs` — frame statistics (fps, wakeups, snapshot/render time), logged once per second with `RUST_LOG=aiterm::perf=debug`.
   - `src/input.rs` — keyboard encoding: winit `KeyEvent` → platform-independent `KeyInput` → bytes, via the legacy xterm encoder or the kitty keyboard protocol encoder (selected by `Modes::KITTY_*`); paste handling. Heavily unit-tested.
 - `crates/vt` (`aiterm-vt`) — the only crate that depends on `alacritty_terminal`.
   - `src/session.rs` — `Session` (PTY + `Term` + I/O thread), `VtEvent`, `Modes`, selection/scroll API, `Frame` snapshot; colors are resolved here.
@@ -47,7 +48,8 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
 
 - **Keep the VT backend swappable.** Only `aiterm-vt` may depend on `alacritty_terminal`, and its public API must not expose alacritty types. The renderer consumes `Frame` from `Session::snapshot`; the app talks to `Session` and receives `VtEvent`s (libghostty-vt is the planned fallback backend).
 - **Grid alignment.** Text rows are split into segments: ASCII runs are shaped together, and each non-ASCII glyph gets its own segment at its cell's x position. Don't merge non-ASCII glyphs into runs, because fallback-font advances would shift the grid.
-- **Redraws.** Request a redraw (`window.request_redraw()`); never render synchronously from PTY events. Frames coalesce on vsync.
+- **Frame pacing.** Request a redraw (`window.request_redraw()`); never render synchronously from PTY events. The renderer calls `window.pre_present_notify()` before presenting, so winit delivers at most one `RedrawRequested` per compositor frame callback (one render per vblank, none while hidden), and prefers `PresentMode::Mailbox` so presenting never blocks the event loop. `VtEvent::Wakeup` is coalesced: after one wakeup, the next is sent only after `Session::snapshot` (`crates/vt/tests/wakeup.rs`).
+- **PTY read budget.** alacritty_terminal's event loop parses at most 64 KiB per terminal lock, then releases the `FairMutex` and services input; measured under a flood this keeps 100 fps and ~4 ms key-to-app latency without throttling throughput, so there is no separate per-frame read budget. Re-measure with `RUST_LOG=aiterm::perf=debug` before adding one.
 - **Synchronized output (DEC 2026)** is implemented by the vte parser: bytes between BSU and ESU are buffered and never reach `Term` until the update ends (or after a 150 ms timeout), and no `Wakeup` is sent meanwhile. Always render from `Session::snapshot` so this guarantee holds; `crates/vt/tests/sync_output.rs` guards it with a real PTY (including a control test that proves tearing is observable).
 - **Colors.** Quad colors go to the shader in linear space (`Rgb::to_linear`); glyphon takes sRGB.
 - **wgpu surface.** In the `Suboptimal` case, the surface texture must be presented or dropped before calling `surface.configure`.
