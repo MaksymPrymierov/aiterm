@@ -1,4 +1,6 @@
+mod desktop_notify;
 mod input;
+mod notifications;
 mod perf;
 
 use std::collections::HashSet;
@@ -20,6 +22,7 @@ use winit::window::{Window, WindowId};
 #[derive(Debug)]
 enum UserEvent {
     Vt(VtEvent),
+    Desktop(desktop_notify::DesktopEvent),
 }
 
 fn linux_kind(kind: ClipboardKind) -> LinuxClipboardKind {
@@ -35,6 +38,7 @@ struct App {
     palette: [Rgb; 256],
     clipboard: Option<Clipboard>,
     command: Option<Vec<String>>,
+    notifications: notifications::Notifications<desktop_notify::DesktopNotifier>,
     state: Option<WindowState>,
 }
 
@@ -52,6 +56,8 @@ struct WindowState {
     last_click: Option<(Instant, usize, usize, u8)>,
     scroll_accum: f64,
     stats: perf::FrameStats,
+    /// Current window title (set by the application with OSC 0/2).
+    title: String,
 }
 
 impl App {
@@ -162,8 +168,14 @@ impl App {
                 st.stats.wakeup();
                 st.renderer.window().request_redraw();
             }
-            VtEvent::Title(t) => st.renderer.window().set_title(&t),
-            VtEvent::ResetTitle => st.renderer.window().set_title("aiterm"),
+            VtEvent::Title(t) => {
+                st.renderer.window().set_title(&t);
+                st.title = t;
+            }
+            VtEvent::ResetTitle => {
+                st.renderer.window().set_title("aiterm");
+                st.title.clear();
+            }
             VtEvent::PtyWrite(s) => st.session.write(s.into_bytes()),
             VtEvent::TextAreaSizeRequest(reply) => st.session.write(reply(st.session.size()).into_bytes()),
             VtEvent::ColorRequest(idx, reply) => {
@@ -191,7 +203,16 @@ impl App {
                 }
             }
             // Notifications, progress, shell integration and images are handled in later milestones.
-            VtEvent::Sequence(seq) => log::debug!("intercepted: {seq:?}"),
+            VtEvent::Sequence(seq) => {
+                log::debug!("intercepted: {seq:?}");
+                let ctx = notifications::Context {
+                    focused: st.focused,
+                    title: &st.title,
+                };
+                if let Some(reply) = self.notifications.handle_sequence(&seq, &ctx) {
+                    st.session.write(reply.into_bytes());
+                }
+            }
             VtEvent::Exit => event_loop.exit(),
         }
     }
@@ -233,12 +254,27 @@ impl ApplicationHandler<UserEvent> for App {
             last_click: None,
             scroll_accum: 0.0,
             stats: perf::FrameStats::default(),
+            title: String::new(),
         });
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Vt(e) => self.handle_vt_event(e, event_loop),
+            UserEvent::Desktop(e) => {
+                let response = self.notifications.handle_desktop_event(e);
+                let Some(st) = &self.state else { return };
+                if response.focus_window {
+                    // winit 0.30 cannot activate an existing window on Wayland; an
+                    // attention request makes the compositor focus or highlight it.
+                    st.renderer
+                        .window()
+                        .request_user_attention(Some(winit::window::UserAttentionType::Critical));
+                }
+                if let Some(reply) = response.reply {
+                    st.session.write(reply.into_bytes());
+                }
+            }
         }
     }
 
@@ -429,8 +465,13 @@ fn main() {
 
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().expect("event loop");
     let theme = Theme::default();
+    let notify_proxy = event_loop.create_proxy();
+    let notifier = desktop_notify::DesktopNotifier::spawn(move |e| {
+        let _ = notify_proxy.send_event(UserEvent::Desktop(e));
+    });
     let mut app = App {
         proxy: event_loop.create_proxy(),
+        notifications: notifications::Notifications::new(notifier),
         palette: theme.palette256(),
         theme,
         clipboard: Clipboard::new().map_err(|e| log::warn!("no clipboard: {e}")).ok(),

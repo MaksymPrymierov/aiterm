@@ -32,6 +32,7 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 - Mouse selection: simple, word (double-click), line (triple-click), block (Ctrl)
 - Clipboard and primary selection (copy on select, paste with middle click)
 - Bracketed paste
+- Desktop notifications from applications via OSC 9 (iTerm2), OSC 777 (rxvt/VTE/Ghostty) and OSC 99 (kitty protocol: chunked/base64 payloads, urgency, occasion, close, capability queries, activation and close reports), delivered through the freedesktop notification service over D-Bus; OSC 9/777 only notify while the window is unfocused, with a rate limit of 5 per 10 s
 - Synchronized output (DEC mode 2026): applications that wrap redraws in `CSI ? 2026 h` … `CSI ? 2026 l` (like Claude Code) never show a half-drawn frame; support is reported via DECRQM, and an unterminated update times out after 150 ms
 - Frame pacing tied to the compositor: at most one render per display refresh and none while the window is hidden; heavy output (e.g. `seq 1 10000000`) keeps full frame rate with ~4 ms key-to-application latency
 - 50,000-line scrollback; the view stays put when new output arrives while you are scrolled up
@@ -41,7 +42,7 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 
 | Version | Scope |
 |---|---|
-| 0.2 | ~~Kitty keyboard protocol~~ (done), ~~synchronized output~~ (done), desktop notifications (OSC 9/777/99), progress (OSC 9;4), OSC 7/8/133 |
+| 0.2 | ~~Kitty keyboard protocol~~ (done), ~~synchronized output~~ (done), ~~desktop notifications (OSC 9/777/99)~~ (done), progress (OSC 9;4), OSC 7/8/133 |
 | 0.3 | Tabs and splits, per-tab session status indicator |
 | 0.4 | Inline images: kitty graphics protocol, Sixel, iTerm2 inline images |
 | 0.5 | TOML config with hot reload, themes, GUI color editor, command palette |
@@ -98,6 +99,16 @@ There is no config file yet (planned for 0.5). For now, use environment variable
 | `RUST_LOG` | `warn` | Log level (`info`, `debug`) |
 
 Child processes get `TERM=xterm-256color`, `COLORTERM=truecolor` and `TERM_PROGRAM=aiterm`.
+
+### Claude Code notifications
+
+Claude Code picks its notification protocol from the terminal it detects, and doesn't know aiterm yet. Set the channel once, in `/config` → Notifications or in `~/.claude/settings.json`:
+
+```json
+{ "preferredNotifChannel": "kitty" }
+```
+
+`kitty` (OSC 99), `iterm2` (OSC 9) and `ghostty` (OSC 777) all work. Clicking a notification asks the compositor to focus aiterm; with winit 0.30 on Wayland this is an attention request, so some compositors highlight the window instead of focusing it.
 
 ## Architecture
 

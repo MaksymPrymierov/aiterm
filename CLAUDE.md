@@ -35,6 +35,8 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
 - `crates/app` (package `aiterm`, the binary)
   - `src/main.rs` — winit `ApplicationHandler`: window/input events, shortcuts, mouse reporting, clipboard, handling of `VtEvent`s.
   - `src/perf.rs` — frame statistics (fps, wakeups, snapshot/render time), logged once per second with `RUST_LOG=aiterm::perf=debug`.
+  - `src/notifications.rs` — notification policy (focus/occasion rules, rate limit, OSC 99 replies and reports) behind a `Sink` trait so it is unit-tested without D-Bus.
+  - `src/desktop_notify.rs` — freedesktop notifications over D-Bus (zbus 5 blocking API, background threads); listens for `ActionInvoked`/`NotificationClosed`.
   - `src/input.rs` — keyboard encoding: winit `KeyEvent` → platform-independent `KeyInput` → bytes, via the legacy xterm encoder or the kitty keyboard protocol encoder (selected by `Modes::KITTY_*`); paste handling. Heavily unit-tested.
 - `crates/vt` (`aiterm-vt`) — the only crate that depends on `alacritty_terminal`.
   - `src/session.rs` — `Session` (PTY + `Term` + I/O thread), `VtEvent`, `Modes`, selection/scroll API, `Frame` snapshot; colors are resolved here.
@@ -42,7 +44,7 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
   - `src/pty.rs` — `TapPty`: wraps the alacritty PTY so the interceptor sees every byte read.
   - `src/theme.rs` — `Theme` and the 256-color palette.
 - `crates/render` (`aiterm-render`) — wgpu renderer: instanced quads (`quad.wgsl`) for backgrounds, decorations and cursor; glyphon for text.
-- `crates/intercept` (`aiterm-intercept`) — dependency-free streaming scanner for OSC/APC/DCS sequences. OSC/DCS boundaries mirror the `vte` state machine; `tests/vte_differential.rs` checks this on 300k random streams with random chunking (vte is a dev-dependency only). `tests/throughput.rs` is an ignored benchmark (`cargo test --release -p aiterm-intercept --test throughput -- --ignored --nocapture`).
+- `crates/intercept` (`aiterm-intercept`) — dependency-free streaming scanner for OSC/APC/DCS sequences, plus `notification.rs`: parsers for OSC 9/777/99 (including chunked kitty notifications). OSC/DCS boundaries mirror the `vte` state machine; `tests/vte_differential.rs` checks this on 300k random streams with random chunking (vte is a dev-dependency only). `tests/throughput.rs` is an ignored benchmark (`cargo test --release -p aiterm-intercept --test throughput -- --ignored --nocapture`).
 
 ## Conventions
 
@@ -55,6 +57,7 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
 - **wgpu surface.** In the `Suboptimal` case, the surface texture must be presented or dropped before calling `surface.configure`.
 - New terminal protocol support (OSC/APC/DCS sequences that alacritty_terminal ignores) goes through `aiterm-intercept`: add the OSC code to `FORWARDED_OSC` in `crates/vt/src/session.rs` and handle `VtEvent::Sequence` in the app. The scanner is an observer and must never modify the byte stream, and it must keep agreeing with vte about where OSC/DCS sequences start and end (any change to its state machine has to pass the differential test).
 - **Keyboard.** The kitty flag stack (`CSI > u` push, `CSI < u` pop, `CSI = u`, `CSI ? u` query) is handled by alacritty_terminal (`Config::kitty_keyboard`); `input.rs` only encodes keys. Encoders take `KeyInput`, never winit types, so every encoding rule has a unit test. Follow the spec at https://sw.kovidgoyal.net/kitty/keyboard-protocol/ exactly; key events can be traced with `RUST_LOG=aiterm=trace`.
+- **Notifications** must never block the UI thread: all D-Bus calls run on the notification threads, and a missing session bus only logs a warning. To test end to end, watch `dbus-monitor --session "interface='org.freedesktop.Notifications'"` while a probe script emits OSC 99, and close notifications with `busctl --user call ... CloseNotification`.
 - Prefer standard terminal protocols (kitty keyboard, OSC 9/777/99, OSC 9;4, OSC 133) over Claude Code-specific hacks.
 
 ## Testing changes visually

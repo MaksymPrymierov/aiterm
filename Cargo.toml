@@ -25,6 +25,8 @@ polling = "3"
 pollster = "0.4"
 wgpu = "30"
 winit = "0.30.13"
+# 5.x: mature line with a blocking API (6.x drops it).
+zbus = { version = "5.19", default-features = false, features = ["async-io", "blocking-api"] }
 
 [profile.release]
 lto = "thin"

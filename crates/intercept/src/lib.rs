@@ -29,6 +29,8 @@
 //! Only 7-bit introducers are recognized; in a UTF-8 stream, bytes `0x80` to
 //! `0x9F` are not C1 controls (as in `vte`).
 
+pub mod notification;
+
 /// Default upper bound for a single sequence payload (kitty graphics and Sixel
 /// payloads can be large).
 pub const DEFAULT_MAX_LEN: usize = 32 * 1024 * 1024;
