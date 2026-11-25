@@ -37,14 +37,15 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
   - `src/perf.rs` — frame statistics (fps, wakeups, snapshot/render time), logged once per second with `RUST_LOG=aiterm::perf=debug`.
   - `src/notifications.rs` — notification policy (focus/occasion rules, rate limit, OSC 99 replies and reports) behind a `Sink` trait so it is unit-tested without D-Bus.
   - `src/desktop_notify.rs` — freedesktop notifications over D-Bus (zbus 5 blocking API, background threads); listens for `ActionInvoked`/`NotificationClosed`.
+  - `src/progress.rs` — per-session `OSC 9;4` progress state (keeps the last value for error/paused, expires after 15 s); the app arms `ControlFlow::WaitUntil` for the expiry and redraws every frame only while progress is indeterminate.
   - `src/input.rs` — keyboard encoding: winit `KeyEvent` → platform-independent `KeyInput` → bytes, via the legacy xterm encoder or the kitty keyboard protocol encoder (selected by `Modes::KITTY_*`); paste handling. Heavily unit-tested.
 - `crates/vt` (`aiterm-vt`) — the only crate that depends on `alacritty_terminal`.
   - `src/session.rs` — `Session` (PTY + `Term` + I/O thread), `VtEvent`, `Modes`, selection/scroll API, `Frame` snapshot; colors are resolved here.
   - `src/frame.rs` — backend-independent `Frame`, `CellView`, `CellFlags`, `Cursor`.
   - `src/pty.rs` — `TapPty`: wraps the alacritty PTY so the interceptor sees every byte read.
   - `src/theme.rs` — `Theme` and the 256-color palette.
-- `crates/render` (`aiterm-render`) — wgpu renderer: instanced quads (`quad.wgsl`) for backgrounds, decorations and cursor; glyphon for text.
-- `crates/intercept` (`aiterm-intercept`) — dependency-free streaming scanner for OSC/APC/DCS sequences, plus `notification.rs`: parsers for OSC 9/777/99 (including chunked kitty notifications). OSC/DCS boundaries mirror the `vte` state machine; `tests/vte_differential.rs` checks this on 300k random streams with random chunking (vte is a dev-dependency only). `tests/throughput.rs` is an ignored benchmark (`cargo test --release -p aiterm-intercept --test throughput -- --ignored --nocapture`).
+- `crates/render` (`aiterm-render`) — wgpu renderer: instanced quads (`quad.wgsl`) for backgrounds, decorations, cursor and the `ProgressBar` overlay; glyphon for text.
+- `crates/intercept` (`aiterm-intercept`) — dependency-free streaming scanner for OSC/APC/DCS sequences, plus `notification.rs` (OSC 9/777/99 parsers, including chunked kitty notifications) and `progress.rs` (`OSC 9;4`). OSC/DCS boundaries mirror the `vte` state machine; `tests/vte_differential.rs` checks this on 300k random streams with random chunking (vte is a dev-dependency only). `tests/throughput.rs` is an ignored benchmark (`cargo test --release -p aiterm-intercept --test throughput -- --ignored --nocapture`).
 
 ## Conventions
 

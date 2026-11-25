@@ -30,6 +30,7 @@
 //! `0x9F` are not C1 controls (as in `vte`).
 
 pub mod notification;
+pub mod progress;
 
 /// Default upper bound for a single sequence payload (kitty graphics and Sixel
 /// payloads can be large).

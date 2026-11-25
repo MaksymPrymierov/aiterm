@@ -27,6 +27,16 @@ struct QuadInstance {
     color: [f32; 4],
 }
 
+/// Thin progress bar along the top edge of the window (inside the padding).
+#[derive(Clone, Copy, Debug)]
+pub struct ProgressBar {
+    /// 0.0..=1.0; `None` draws an animated indeterminate segment.
+    pub fraction: Option<f32>,
+    pub color: Rgb,
+    /// Animation time in seconds, used for the indeterminate segment.
+    pub phase: f32,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct CellMetrics {
     pub font_px: f32,
@@ -419,14 +429,39 @@ impl Renderer {
     }
 
     fn push_quad(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb) {
+        self.push_quad_alpha(x, y, w, h, color, 1.0);
+    }
+
+    fn push_quad_alpha(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb, alpha: f32) {
+        let [r, g, b, _] = color.to_linear();
         self.quads.push(QuadInstance {
             pos: [x, y],
             size: [w, h],
-            color: color.to_linear(),
+            color: [r, g, b, alpha],
         });
     }
 
-    pub fn render(&mut self, frame: &Frame) {
+    fn push_progress(&mut self, bar: &ProgressBar) {
+        let width = self.config.width as f32;
+        let height = (3.0 * self.scale).round().max(2.0);
+        // Faint track, so a small percentage is still recognizable as a bar.
+        self.push_quad_alpha(0.0, 0.0, width, height, bar.color, 0.25);
+        match bar.fraction {
+            Some(f) => self.push_quad(0.0, 0.0, width * f.clamp(0.0, 1.0), height, bar.color),
+            None => {
+                // A segment a quarter of the width sweeping left to right.
+                let seg = width * 0.25;
+                let t = (bar.phase * 0.6).fract();
+                let x = -seg + t * (width + seg);
+                let (x0, x1) = (x.max(0.0), (x + seg).min(width));
+                if x1 > x0 {
+                    self.push_quad(x0, 0.0, x1 - x0, height, bar.color);
+                }
+            }
+        }
+    }
+
+    pub fn render(&mut self, frame: &Frame, progress: Option<&ProgressBar>) {
         let m = self.metrics;
         let pad = self.padding();
         let (width, height) = (self.config.width, self.config.height);
@@ -494,6 +529,9 @@ impl Renderer {
                     self.push_quad(x + w - thickness, y, thickness, m.h, cur.color);
                 }
             }
+        }
+        if let Some(bar) = progress {
+            self.push_progress(bar);
         }
 
         if self.quads.len() > self.instance_cap {

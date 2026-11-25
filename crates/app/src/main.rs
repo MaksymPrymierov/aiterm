@@ -2,18 +2,19 @@ mod desktop_notify;
 mod input;
 mod notifications;
 mod perf;
+mod progress;
 
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aiterm_render::Renderer;
+use aiterm_render::{ProgressBar, Renderer};
 use aiterm_vt::{ClipboardKind, Modes, Rgb, Scroll, SelectionKind, Session, Theme, VtEvent};
 use arboard::{Clipboard, GetExtLinux, LinuxClipboardKind, SetExtLinux};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::window::{Window, WindowId};
@@ -58,6 +59,10 @@ struct WindowState {
     stats: perf::FrameStats,
     /// Current window title (set by the application with OSC 0/2).
     title: String,
+    /// Task progress reported with OSC 9;4.
+    progress: progress::SessionProgress,
+    /// Start of the progress animation clock.
+    started: Instant,
 }
 
 impl App {
@@ -205,6 +210,11 @@ impl App {
             // Notifications, progress, shell integration and images are handled in later milestones.
             VtEvent::Sequence(seq) => {
                 log::debug!("intercepted: {seq:?}");
+                if let Some(report) = aiterm_vt::progress::parse_progress(&seq) {
+                    st.progress.apply(report, Instant::now());
+                    st.renderer.window().request_redraw();
+                    return;
+                }
                 let ctx = notifications::Context {
                     focused: st.focused,
                     title: &st.title,
@@ -219,6 +229,18 @@ impl App {
 }
 
 impl ApplicationHandler<UserEvent> for App {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(st) = self.state.as_mut() else { return };
+        if st.progress.expire(Instant::now()) {
+            st.renderer.window().request_redraw();
+        }
+        // Wake up to drop a stale progress report.
+        event_loop.set_control_flow(match st.progress.deadline() {
+            Some(deadline) => ControlFlow::WaitUntil(deadline),
+            None => ControlFlow::Wait,
+        });
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -255,6 +277,8 @@ impl ApplicationHandler<UserEvent> for App {
             scroll_accum: 0.0,
             stats: perf::FrameStats::default(),
             title: String::new(),
+            progress: progress::SessionProgress::default(),
+            started: Instant::now(),
         });
     }
 
@@ -445,8 +469,21 @@ impl ApplicationHandler<UserEvent> for App {
                 let start = Instant::now();
                 let frame = st.session.snapshot(&self.theme, &self.palette, st.focused);
                 let snapshot = start.elapsed();
-                st.renderer.render(&frame);
+                let bar = st.progress.shown().map(|shown| ProgressBar {
+                    fraction: shown.fraction,
+                    color: match shown.kind {
+                        progress::Kind::Normal | progress::Kind::Indeterminate => self.theme.ansi[4],
+                        progress::Kind::Error => self.theme.ansi[1],
+                        progress::Kind::Paused => self.theme.ansi[3],
+                    },
+                    phase: st.started.elapsed().as_secs_f32(),
+                });
+                st.renderer.render(&frame, bar.as_ref());
                 st.stats.frame(snapshot, start.elapsed() - snapshot);
+                if st.progress.is_animated() {
+                    // Paced by frame callbacks: one frame per display refresh while visible.
+                    st.renderer.window().request_redraw();
+                }
             }
             _ => {}
         }
