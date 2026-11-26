@@ -1,3 +1,4 @@
+mod activation;
 mod desktop_notify;
 mod input;
 mod links;
@@ -241,9 +242,13 @@ impl App {
                     st.renderer
                         .window()
                         .request_user_attention(Some(winit::window::UserAttentionType::Informational));
+                    let ctx = notifications::Context {
+                        focused: st.focused,
+                        title: &st.title,
+                    };
+                    self.notifications.handle_bell(&ctx);
                 }
             }
-            // Notifications, progress, shell integration and images are handled in later milestones.
             VtEvent::Sequence(seq) => {
                 log::debug!("intercepted: {seq:?}");
                 if let Some(event) = aiterm_vt::shell::parse_shell_event(&seq, &self.hostname) {
@@ -340,11 +345,21 @@ impl ApplicationHandler<UserEvent> for App {
                 let response = self.notifications.handle_desktop_event(e);
                 let Some(st) = &self.state else { return };
                 if response.focus_window {
-                    // winit 0.30 cannot activate an existing window on Wayland; an
-                    // attention request makes the compositor focus or highlight it.
-                    st.renderer
-                        .window()
-                        .request_user_attention(Some(winit::window::UserAttentionType::Critical));
+                    let window = st.renderer.window();
+                    // With the server's xdg-activation token the compositor focuses the
+                    // window; without one, fall back to an attention request (highlight).
+                    let activated = match response.activation_token.as_deref() {
+                        Some(token) => {
+                            log::debug!("activating the window with an xdg-activation token");
+                            activation::activate(window, token)
+                        }
+                        .map_err(|e| log::warn!("window activation failed: {e}"))
+                        .is_ok(),
+                        None => false,
+                    };
+                    if !activated {
+                        window.request_user_attention(Some(winit::window::UserAttentionType::Critical));
+                    }
                 }
                 if let Some(reply) = response.reply {
                     st.session.write(reply.into_bytes());

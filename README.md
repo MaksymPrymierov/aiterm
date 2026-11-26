@@ -33,6 +33,7 @@ The goal of aiterm is for all of this to work out of the box, without tmux and w
 - Clipboard and primary selection (copy on select, paste with middle click)
 - Bracketed paste
 - Desktop notifications from applications via OSC 9 (iTerm2), OSC 777 (rxvt/VTE/Ghostty) and OSC 99 (kitty protocol: chunked/base64 payloads, urgency, occasion, close, capability queries, activation and close reports), delivered through the freedesktop notification service over D-Bus; OSC 9/777 only notify while the window is unfocused, with a rate limit of 5 per 10 s
+- A bell (BEL) from an unfocused window shows a desktop notification, so programs that only ring the bell can still get your attention
 - Progress reporting via `OSC 9 ; 4` (ConEmu/Windows Terminal protocol): a thin bar along the top edge shows normal (blue), error (red), paused (yellow) and indeterminate (animated) states; reports not refreshed for 15 s are cleared, so a crashed program never leaves a stale bar
 - Hyperlinks (OSC 8): underlined, highlighted on hover with the real target shown in the bottom-left corner; Ctrl+click opens `http(s)`, `mailto` and local `file://` links via `xdg-open`
 - Shell integration: OSC 7 working directory (Ctrl+Shift+N opens a new window there; falls back to the shell's `/proc` cwd) and OSC 133 prompt marks, shown in the left margin, with Ctrl+Shift+Z / Ctrl+Shift+X to jump to the previous / next prompt
@@ -110,13 +111,25 @@ Child processes get `TERM=xterm-256color`, `COLORTERM=truecolor` and `TERM_PROGR
 
 ### Claude Code notifications
 
-Claude Code picks its notification protocol from the terminal it detects, and doesn't know aiterm yet. Set the channel once, in `/config` → Notifications or in `~/.claude/settings.json`:
+Claude Code only sends desktop notifications to terminals it recognizes (iTerm2, Ghostty, kitty); for other terminals its default (`"auto"`) sends nothing. There are two ways to get notifications in aiterm when Claude needs input or finishes:
 
-```json
-{ "preferredNotifChannel": "kitty" }
-```
+1. **Recommended: a `Notification` hook** that shows Claude's actual message. Copy [`contrib/claude-code/notify-hook.sh`](contrib/claude-code/notify-hook.sh) somewhere on your machine (it needs `jq`) and add it to `~/.claude/settings.json`:
 
-`kitty` (OSC 99), `iterm2` (OSC 9) and `ghostty` (OSC 777) all work. Clicking a notification asks the compositor to focus aiterm; with winit 0.30 on Wayland this is an attention request, so some compositors highlight the window instead of focusing it.
+   ```json
+   {
+     "hooks": {
+       "Notification": [
+         { "hooks": [{ "type": "command", "command": "~/.local/bin/aiterm-claude-notify.sh" }] }
+       ]
+     }
+   }
+   ```
+
+   The hook returns the notification as a `terminalSequence` (OSC 777), which Claude Code writes to the terminal ([hooks reference](https://code.claude.com/docs/en/hooks)).
+
+2. **Bell:** set `"preferredNotifChannel": "terminal_bell"` (in `/config` it is listed under local notifications). aiterm turns a bell from an unfocused window into a "Needs your attention" notification titled with the window title.
+
+Use one of the two; with both, you may get two notifications. Clicking a notification focuses aiterm when the notification server provides an xdg-activation token (freedesktop spec 1.2 `ActivationToken`); otherwise the window is only marked as needing attention.
 
 ## Architecture
 

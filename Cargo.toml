@@ -23,6 +23,10 @@ glyphon = "0.12"
 log = "0.4"
 polling = "3"
 pollster = "0.4"
+# Same versions/features winit already pulls in; used for xdg-activation.
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wgpu = "30"
 winit = "0.30.13"
 # 5.x: mature line with a blocking API (6.x drops it).

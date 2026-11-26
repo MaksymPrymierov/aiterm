@@ -44,10 +44,11 @@ enum Request {
     Close(Key),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DesktopEvent {
-    /// The user clicked the notification.
-    Activated(Key),
+    /// The user clicked the notification. `token` is an xdg-activation token
+    /// from the server (spec 1.2 `ActivationToken`), if it provides one.
+    Activated { key: Key, token: Option<String> },
     /// The notification was dismissed, expired or closed.
     Closed(Key),
 }
@@ -92,14 +93,7 @@ fn run(rx: Receiver<Request>, on_event: Arc<dyn Fn(DesktopEvent) + Send + Sync>)
     log::debug!("notification server capabilities: {caps:?}");
 
     let ids: IdMap = Arc::default();
-    listen(&conn, "ActionInvoked", ids.clone(), on_event.clone(), |msg| {
-        let (id, _action): (u32, String) = msg.body().deserialize().ok()?;
-        Some((id, false))
-    })?;
-    listen(&conn, "NotificationClosed", ids.clone(), on_event, |msg| {
-        let (id, _reason): (u32, u32) = msg.body().deserialize().ok()?;
-        Some((id, true))
-    })?;
+    listen(&conn, ids.clone(), on_event)?;
 
     for request in rx {
         match request {
@@ -142,32 +136,46 @@ fn run(rx: Receiver<Request>, on_event: Arc<dyn Fn(DesktopEvent) + Send + Sync>)
     Ok(())
 }
 
-/// Spawn a thread forwarding `signal` for our notifications. `parse` returns
-/// the server id and whether the notification is gone.
-fn listen(
-    conn: &Connection,
-    signal: &'static str,
-    ids: IdMap,
-    on_event: Arc<dyn Fn(DesktopEvent) + Send + Sync>,
-    parse: fn(&zbus::Message) -> Option<(u32, bool)>,
-) -> zbus::Result<()> {
+/// Forward the server's signals for our notifications from one thread, so
+/// `ActivationToken` is always seen before the `ActionInvoked` it belongs to.
+fn listen(conn: &Connection, ids: IdMap, on_event: Arc<dyn Fn(DesktopEvent) + Send + Sync>) -> zbus::Result<()> {
     let proxy = Proxy::new(conn, DEST, PATH, IFACE)?;
-    let signals = proxy.receive_signal(signal)?;
+    let signals = proxy.receive_all_signals()?;
     std::thread::Builder::new()
-        .name(format!("notify-{signal}"))
+        .name("notify-signals".into())
         .spawn(move || {
+            let mut tokens: HashMap<u32, String> = HashMap::new();
             for msg in signals {
-                let Some((id, closed)) = parse(&msg) else { continue };
-                let key = {
-                    let mut ids = ids.lock().unwrap();
-                    if closed { ids.remove(&id) } else { ids.get(&id).copied() }
-                };
-                if let Some(key) = key {
-                    on_event(if closed {
-                        DesktopEvent::Closed(key)
-                    } else {
-                        DesktopEvent::Activated(key)
-                    });
+                let header = msg.header();
+                let Some(member) = header.member() else { continue };
+                match member.as_str() {
+                    "ActivationToken" => {
+                        if let Ok((id, token)) = msg.body().deserialize::<(u32, String)>() {
+                            tokens.insert(id, token);
+                        }
+                    }
+                    "ActionInvoked" => {
+                        let Ok((id, _action)) = msg.body().deserialize::<(u32, String)>() else {
+                            continue;
+                        };
+                        let key = ids.lock().unwrap().get(&id).copied();
+                        if let Some(key) = key {
+                            on_event(DesktopEvent::Activated {
+                                key,
+                                token: tokens.remove(&id),
+                            });
+                        }
+                    }
+                    "NotificationClosed" => {
+                        let Ok((id, _reason)) = msg.body().deserialize::<(u32, u32)>() else {
+                            continue;
+                        };
+                        tokens.remove(&id);
+                        if let Some(key) = ids.lock().unwrap().remove(&id) {
+                            on_event(DesktopEvent::Closed(key));
+                        }
+                    }
+                    _ => {}
                 }
             }
         })

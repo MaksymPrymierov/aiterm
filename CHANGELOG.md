@@ -5,6 +5,26 @@ All notable changes to aiterm are documented here. The format is based on
 follows [Semantic Versioning](https://semver.org/). The release workflow
 publishes the section of the tagged version as the GitHub release notes.
 
+## [Unreleased]
+
+### Added
+
+- A bell (BEL) from an unfocused window shows a desktop notification ("Needs
+  your attention", titled with the window title). Works with Claude Code's
+  `preferredNotifChannel: "terminal_bell"`; a bell within 2 seconds of another
+  notification is treated as a duplicate.
+- `contrib/claude-code/notify-hook.sh`: a Claude Code `Notification` hook that
+  shows Claude's message through aiterm (OSC 777 via `terminalSequence`).
+
+### Fixed
+
+- Clicking a notification now focuses the window on compositors that require
+  an activation token (such as niri): aiterm uses the xdg-activation token
+  sent by the notification server (`ActivationToken`, notification spec 1.2)
+  and falls back to an attention request without one.
+- README: Claude Code no longer offers per-terminal notification channels for
+  unknown terminals; the docs now describe the hook and bell setups.
+
 ## [0.2.0] - 2026-11-26
 
 Terminal protocols for working with Claude Code and other modern TUI applications.
@@ -71,5 +91,6 @@ First release: a working single-window terminal.
 - `aiterm -e <command>`, `AITERM_FONT` and `AITERM_FONT_SIZE`.
 - CI on pushes and pull requests; releases built from `vX.Y.Z` tags.
 
+[Unreleased]: https://github.com/MaksymPrymierov/aiterm/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/MaksymPrymierov/aiterm/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MaksymPrymierov/aiterm/releases/tag/v0.1.0

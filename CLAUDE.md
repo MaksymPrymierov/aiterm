@@ -28,6 +28,10 @@ RUST_LOG=info cargo run -- -e bash   # run with logging; `-e` runs a command ins
 - `.github/workflows/release.yml` runs on `vX.Y.Z` tags: the tag must equal the workspace `version` in the root `Cargo.toml`, otherwise the release fails. Bump the version (and `Cargo.lock`) and add a `## [X.Y.Z] - date` section to `CHANGELOG.md` before tagging; that section becomes the release notes (followed by GitHub's generated change list).
 - The release binary must stay free of system library link dependencies beyond libc (Wayland, xkbcommon and fonts are loaded at runtime), so the CI runner needs no extra packages.
 
+## Claude Code integration notes
+
+- Claude Code's built-in notifications (`preferredNotifChannel`) only target terminals it recognizes; for aiterm use the `Notification` hook in `contrib/claude-code/notify-hook.sh` (returns `terminalSequence`, which Claude Code allows only for OSC 0/1/2/9/99/777 and BEL) or `"terminal_bell"`. Don't spoof `TERM_PROGRAM` to get notifications.
+
 ## Code layout
 
 Cargo workspace; dependency graph `app → render → vt → intercept` (and `app → vt`):
@@ -35,8 +39,9 @@ Cargo workspace; dependency graph `app → render → vt → intercept` (and `ap
 - `crates/app` (package `aiterm`, the binary)
   - `src/main.rs` — winit `ApplicationHandler`: window/input events, shortcuts, mouse reporting, clipboard, handling of `VtEvent`s.
   - `src/perf.rs` — frame statistics (fps, wakeups, snapshot/render time), logged once per second with `RUST_LOG=aiterm::perf=debug`.
-  - `src/notifications.rs` — notification policy (focus/occasion rules, rate limit, OSC 99 replies and reports) behind a `Sink` trait so it is unit-tested without D-Bus.
-  - `src/desktop_notify.rs` — freedesktop notifications over D-Bus (zbus 5 blocking API, background threads); listens for `ActionInvoked`/`NotificationClosed`.
+  - `src/notifications.rs` — notification policy (focus/occasion rules, bell notifications with 2 s dedup, rate limit, OSC 99 replies and reports) behind a `Sink` trait so it is unit-tested without D-Bus.
+  - `src/desktop_notify.rs` — freedesktop notifications over D-Bus (zbus 5 blocking API, background threads); one signal thread handles `ActivationToken`, `ActionInvoked` and `NotificationClosed` in order.
+  - `src/activation.rs` — focuses the window with an xdg-activation token (`xdg_activation_v1.activate` on winit's `wl_display` via a private event queue), because winit 0.30 can't activate an existing Wayland window.
   - `src/progress.rs` — per-session `OSC 9;4` progress state (keeps the last value for error/paused, expires after 15 s); the app arms `ControlFlow::WaitUntil` for the expiry and redraws every frame only while progress is indeterminate.
   - `src/links.rs` — OSC 8 link opening (scheme allow-list, `xdg-open` without a shell), new window in a directory, `/proc` cwd fallback.
   - `src/input.rs` — keyboard encoding: winit `KeyEvent` → platform-independent `KeyInput` → bytes, via the legacy xterm encoder or the kitty keyboard protocol encoder (selected by `Modes::KITTY_*`); paste handling. Heavily unit-tested.

@@ -41,7 +41,9 @@ jobs:
         run: |
           name="aiterm-${GITHUB_REF_NAME}-x86_64-linux"
           mkdir -p "dist/${name}"
-          cp target/release/aiterm README.md LICENSE "dist/${name}/"
+          cp target/release/aiterm README.md LICENSE CHANGELOG.md "dist/${name}/"
+          mkdir -p "dist/${name}/contrib/claude-code"
+          cp contrib/claude-code/notify-hook.sh "dist/${name}/contrib/claude-code/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
           (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
           echo "archive=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"

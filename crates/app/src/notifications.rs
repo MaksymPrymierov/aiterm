@@ -3,6 +3,10 @@
 //!
 //! - OSC 9 and 777 are shown only while the window is unfocused; OSC 99
 //!   follows its `o=` occasion (default: always).
+//! - A bell (BEL) while the window is unfocused also notifies, so programs
+//!   that only ring the bell (Claude Code with `preferredNotifChannel:
+//!   "terminal_bell"`, long builds with `; printf '\a'`) can still get the
+//!   user's attention. A bell right after another notification is ignored.
 //! - At most [`RATE_LIMIT`] notifications per [`RATE_WINDOW`], so a runaway
 //!   program can't flood the desktop.
 
@@ -16,6 +20,9 @@ use crate::desktop_notify::{self, DesktopEvent, DesktopNotifier, Key, ShowReques
 
 pub const RATE_LIMIT: usize = 5;
 pub const RATE_WINDOW: Duration = Duration::from_secs(10);
+/// A bell within this time after another notification is a duplicate (some
+/// programs send an OSC notification and a bell together).
+pub const BELL_DEDUP: Duration = Duration::from_secs(2);
 
 /// Where notifications go; the D-Bus notifier in production, a recorder in tests.
 pub trait Sink {
@@ -45,6 +52,8 @@ pub struct Context<'a> {
 pub struct Response {
     /// Bring the terminal window to the front.
     pub focus_window: bool,
+    /// xdg-activation token that lets the compositor focus the window.
+    pub activation_token: Option<String>,
     /// Bytes to send to the application in the PTY.
     pub reply: Option<String>,
 }
@@ -62,6 +71,7 @@ pub struct Notifications<S: Sink> {
     shown: HashMap<Key, Shown>,
     next_key: Key,
     recent: VecDeque<Instant>,
+    last_shown: Option<Instant>,
 }
 
 impl<S: Sink> Notifications<S> {
@@ -72,6 +82,7 @@ impl<S: Sink> Notifications<S> {
             shown: HashMap::new(),
             next_key: 1,
             recent: VecDeque::new(),
+            last_shown: None,
         }
     }
 
@@ -112,18 +123,10 @@ impl<S: Sink> Notifications<S> {
             log::debug!("notification suppressed (window focused): {:?}", n.title);
             return;
         }
-        while self
-            .recent
-            .front()
-            .is_some_and(|t| now.duration_since(*t) > RATE_WINDOW)
-        {
-            self.recent.pop_front();
-        }
-        if self.recent.len() >= RATE_LIMIT {
+        if !self.admit(now) {
             log::warn!("notification rate limit reached, dropping {:?}", n.title);
             return;
         }
-        self.recent.push_back(now);
 
         let (summary, body) = if n.title.is_empty() {
             let summary = if ctx.title.is_empty() { "aiterm" } else { ctx.title };
@@ -156,14 +159,66 @@ impl<S: Sink> Notifications<S> {
         });
     }
 
+    /// Sliding-window rate limit; records the notification if admitted.
+    fn admit(&mut self, now: Instant) -> bool {
+        while self
+            .recent
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > RATE_WINDOW)
+        {
+            self.recent.pop_front();
+        }
+        if self.recent.len() >= RATE_LIMIT {
+            return false;
+        }
+        self.recent.push_back(now);
+        self.last_shown = Some(now);
+        true
+    }
+
+    /// The application rang the bell (BEL).
+    pub fn handle_bell(&mut self, ctx: &Context) {
+        self.bell_at(ctx, Instant::now());
+    }
+
+    fn bell_at(&mut self, ctx: &Context, now: Instant) {
+        if ctx.focused || self.last_shown.is_some_and(|t| now.duration_since(t) < BELL_DEDUP) {
+            return;
+        }
+        if !self.admit(now) {
+            log::warn!("notification rate limit reached, dropping bell");
+            return;
+        }
+        let key = self.next_key;
+        self.next_key += 1;
+        self.shown.insert(
+            key,
+            Shown {
+                client_id: None,
+                focus_on_activate: true,
+                report_activation: false,
+                report_close: false,
+            },
+        );
+        self.sink.show(ShowRequest {
+            key,
+            summary: if ctx.title.is_empty() { "aiterm" } else { ctx.title }.to_string(),
+            body: "Needs your attention".to_string(),
+            urgency: desktop_notify::Urgency::Normal,
+            expire_ms: None,
+            clickable: true,
+        });
+    }
+
     pub fn handle_desktop_event(&mut self, event: DesktopEvent) -> Response {
         match event {
-            DesktopEvent::Activated(key) => {
+            DesktopEvent::Activated { key, token } => {
                 let Some(s) = self.shown.get(&key) else {
                     return Response::default();
                 };
                 Response {
                     focus_window: s.focus_on_activate,
+                    activation_token: token.filter(|_| s.focus_on_activate),
                     reply: s
                         .client_id
                         .as_deref()
@@ -177,6 +232,7 @@ impl<S: Sink> Notifications<S> {
                 };
                 Response {
                     focus_window: false,
+                    activation_token: None,
                     reply: s
                         .client_id
                         .as_deref()
@@ -277,9 +333,14 @@ mod tests {
         let key = rec.shown.borrow()[0].key;
 
         assert_eq!(
-            n.handle_desktop_event(DesktopEvent::Activated(key)),
+            n.handle_desktop_event(DesktopEvent::Activated {
+                key,
+                token: Some("tok".into())
+            }),
             Response {
                 focus_window: false,
+                // `-focus`: the token is not used.
+                activation_token: None,
                 reply: Some("\x1b]99;i=job;\x1b\\".into())
             }
         );
@@ -292,6 +353,7 @@ mod tests {
             n.handle_desktop_event(DesktopEvent::Closed(key)),
             Response {
                 focus_window: false,
+                activation_token: None,
                 reply: Some("\x1b]99;i=job:p=close;\x1b\\".into())
             }
         );
@@ -308,8 +370,38 @@ mod tests {
         let mut n = Notifications::new(rec.clone());
         n.handle_sequence(&osc("9;Waiting"), &UNFOCUSED);
         let key = rec.shown.borrow()[0].key;
-        let r = n.handle_desktop_event(DesktopEvent::Activated(key));
+        let r = n.handle_desktop_event(DesktopEvent::Activated {
+            key,
+            token: Some("xdg-token".into()),
+        });
         assert!(r.focus_window);
+        assert_eq!(r.activation_token.as_deref(), Some("xdg-token"));
         assert_eq!(r.reply, None);
+    }
+
+    #[test]
+    fn bell_notifies_only_when_unfocused_and_not_twice() {
+        let rec = Recorder::default();
+        let mut n = Notifications::new(rec.clone());
+        let t0 = Instant::now();
+        n.bell_at(&FOCUSED, t0);
+        assert!(rec.shown.borrow().is_empty());
+        n.bell_at(&UNFOCUSED, t0);
+        assert_eq!(rec.shown.borrow().len(), 1);
+        assert_eq!(rec.shown.borrow()[0].summary, "✳ Claude Code");
+        // A second bell right away (or right after an OSC notification) is a duplicate.
+        n.bell_at(&UNFOCUSED, t0 + Duration::from_millis(500));
+        assert_eq!(rec.shown.borrow().len(), 1);
+        n.bell_at(&UNFOCUSED, t0 + BELL_DEDUP + Duration::from_millis(1));
+        assert_eq!(rec.shown.borrow().len(), 2);
+    }
+
+    #[test]
+    fn bell_right_after_osc_notification_is_ignored() {
+        let rec = Recorder::default();
+        let mut n = Notifications::new(rec.clone());
+        n.handle_sequence(&osc("9;Claude is waiting"), &UNFOCUSED);
+        n.handle_bell(&UNFOCUSED);
+        assert_eq!(rec.shown.borrow().len(), 1);
     }
 }
